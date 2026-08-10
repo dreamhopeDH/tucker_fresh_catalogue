@@ -21,7 +21,14 @@ TRANSIENT_STATUS = {429, 500, 502, 503, 504}
 def parse_price_cents(value: str | None) -> int | None:
     if not value:
         return None
-    match = re.search(r"\$?\s*(\d+(?:[.,]\d{1,2})?)", value.replace(",", ""))
+    normalized = value.replace(",", "")
+    dollar_match = re.search(r"\$\s*(\d+(?:\.\d{1,2})?)", normalized)
+    if dollar_match:
+        return round(float(dollar_match.group(1)) * 100)
+    cents_match = re.search(r"(\d+)\s*(?:c\b|¢)", normalized, re.IGNORECASE)
+    if cents_match:
+        return int(cents_match.group(1))
+    match = re.search(r"(\d+(?:\.\d{1,2})?)", normalized)
     return round(float(match.group(1)) * 100) if match else None
 
 
@@ -44,7 +51,13 @@ def _attribute(card: Tag, selectors: tuple[str, ...], attribute: str) -> str | N
 def parse_specials_page(html: str, page_url: str, source_order: int = 0) -> list[RawProduct]:
     soup = BeautifulSoup(html, "html.parser")
     cards: list[Tag] = []
-    for selector in ("[data-product-id]", ".product-card", ".product-item", "article.product"):
+    for selector in (
+        "[data-product-id]",
+        ".product-card",
+        ".product-item",
+        "article.product",
+        ".talker[data-talker]",
+    ):
         cards = list(soup.select(selector))
         if cards:
             break
@@ -55,33 +68,49 @@ def parse_specials_page(html: str, page_url: str, source_order: int = 0) -> list
     products: list[RawProduct] = []
     for offset, card in enumerate(cards):
         try:
-            name = card.get("data-product-name") or _text(
-                card, (".product-name", ".name", "h2", "h3")
+            name = (
+                card.get("data-product-name")
+                or _attribute(card, (".talker__name[title]",), "title")
+                or _text(card, (".product-name", ".name", "h2", "h3"))
             )
             href = card.get("data-product-url") or _attribute(
-                card, ("a.product-link", "a[href]"), "href"
+                card, ("a.product-link", ".talker__imagery a[href]", "a[href]"), "href"
             )
             if not name or not href:
                 raise ValueError("missing name or URL")
-            image = card.get("data-image-url") or _attribute(
-                card, ("img[data-src]", "img[src]"), "data-src"
-            ) or _attribute(card, ("img[src]",), "src")
+            image = (
+                card.get("data-image-url")
+                or _attribute(card, ("img[data-src]",), "data-src")
+                or _attribute(card, (".talker__imagery img[src]", "img[src]"), "src")
+            )
+            source_product_id = card.get("data-product-id")
+            if not source_product_id and str(card.get("id", "")).startswith("line_"):
+                source_product_id = str(card.get("id"))[len("line_") :]
+            offer_text = card.get("data-offer") or _text(card, (".offer", ".promotion"))
+            if not offer_text and "talker--Special" in card.get("class", []):
+                offer_text = "Special"
             products.append(
                 RawProduct(
-                    source_product_id=str(card.get("data-product-id")) if card.get("data-product-id") else None,
+                    source_product_id=str(source_product_id) if source_product_id else None,
                     name=str(name),
                     product_url=urljoin(page_url, str(href)),
                     image_url=urljoin(page_url, str(image)) if image else None,
                     regular_price_cents=parse_price_cents(
-                        card.get("data-regular-price") or _text(card, (".regular-price", ".was-price"))
+                        card.get("data-regular-price")
+                        or _text(
+                            card,
+                            (".regular-price", ".was-price", ".talker__prices__was"),
+                        )
                     ),
                     special_price_cents=parse_price_cents(
-                        card.get("data-special-price") or _text(card, (".special-price", ".price"))
+                        card.get("data-special-price")
+                        or _text(card, (".special-price", ".price", ".price__sell"))
                     ),
                     saving_cents=parse_price_cents(
-                        card.get("data-saving") or _text(card, (".saving", ".save"))
+                        card.get("data-saving")
+                        or _text(card, (".saving", ".save", ".talker__sticker__label"))
                     ),
-                    offer_text=card.get("data-offer") or _text(card, (".offer", ".promotion")),
+                    offer_text=str(offer_text) if offer_text else None,
                     scraped_at=scraped_at,
                     source_order=source_order + offset,
                 )
