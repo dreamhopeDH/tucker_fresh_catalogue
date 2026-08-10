@@ -257,7 +257,6 @@ B2_KEY_ID
 B2_APPLICATION_KEY
 B2_BUCKET
 B2_PREFIX
-IMAGE_BASE_URL
 
 CLOUDFLARE_ACCOUNT_ID
 CLOUDFLARE_API_TOKEN
@@ -814,15 +813,15 @@ output/site/
 image_key
 ```
 
-前端通过：
+前端通过同源的 Cloudflare Pages Function 路由：
 
 ```text
-IMAGE_BASE_URL + "/" + image_key
+"/images/" + image_key
 ```
 
-生成图片 URL。
+生成图片 URL。Pages Function 使用独立的只读 B2 凭证签名私有 bucket 的 S3-compatible GET 请求。
 
-不要把 B2 域名散落在每个商品记录或多个前端文件中。
+不要把 B2 endpoint、bucket 名或任何 B2 凭证写入 catalogue JSON 或浏览器 JavaScript。
 
 ---
 
@@ -1005,27 +1004,26 @@ Cloudflare Pages 部署结果
 
 # 18. GitHub Secrets
 
-README 中说明需要配置：
+README 中说明 GitHub Actions 需要配置：
+
+```text
+B2_KEY_ID
+B2_APPLICATION_KEY
+CLOUDFLARE_API_TOKEN
+```
+
+GitHub Actions Variables：
 
 ```text
 B2_ENDPOINT
-B2_KEY_ID
-B2_APPLICATION_KEY
 B2_BUCKET
-B2_PUBLIC_BASE_URL
-
 CLOUDFLARE_ACCOUNT_ID
-CLOUDFLARE_API_TOKEN
-CLOUDFLARE_PAGES_PROJECT
-```
-
-建议：
-
-```text
 CLOUDFLARE_PAGES_PROJECT=tucker-catalogue-test
 ```
 
-`B2_PUBLIC_BASE_URL` 作为前端的 `IMAGE_BASE_URL`。
+Cloudflare Pages runtime Variables 为 `B2_ENDPOINT`、`B2_BUCKET`；Encrypted Secrets 为独立只读的 `B2_READ_KEY_ID`、`B2_READ_APPLICATION_KEY`。
+
+B2 bucket 必须保持 private。Cloudflare Pages 运行时不得复用 GitHub Actions 的读写 B2 凭证。
 
 不要在日志中输出密钥、Authorization header 或完整连接配置。
 
@@ -1253,7 +1251,7 @@ old_url != new_url
 
 当前为 `B2ImageStore`。
 
-前端只使用 `IMAGE_BASE_URL` 和 `image_key`。
+前端只使用同源 `/images/` 路由和 `image_key`。
 
 ## 分组算法
 

@@ -91,7 +91,6 @@ def run(fixture: Path | None = None, skip_images: bool = False) -> dict:
         image_manifest=image_manifest,
         page_size=settings.page_size,
         source_product_count=len(products),
-        image_base_url=settings.image_base_url,
     )
     write_catalogue_files(catalogue, settings.site_data_directory)
     _write_json(settings.output_directory / "catalogue-manifest.json", catalogue["manifest"])

@@ -29,7 +29,6 @@ type Manifest = {
   generated_at: string;
   page_count: number;
   pages: string[];
-  image_base_url: string;
   uncertain_start_page: number | null;
 };
 
@@ -55,8 +54,8 @@ function money(cents: number | null): string {
 }
 
 function imageUrl(key: string | null): string {
-  if (!key || !manifest.image_base_url) return placeholderUrl;
-  return `${manifest.image_base_url.replace(/\/$/, "")}/${key}`;
+  if (!key) return placeholderUrl;
+  return `/images/${key.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 function makeImage(product: ProductView): HTMLImageElement {

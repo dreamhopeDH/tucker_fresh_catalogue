@@ -1,8 +1,8 @@
 # Tucker Fresh 100-product test catalogue
 
-This repository builds a mobile-first static weekly-specials catalogue from the first 100 unique products returned by the Tucker Fresh Broadway specials pages. It is deliberately a test MVP: Python scrapes and normalizes data, conservatively groups product families, synchronizes resized images to Backblaze B2, writes paged JSON, and Vite builds a framework-free TypeScript site for Cloudflare Pages.
+This repository builds a mobile-first static weekly-specials catalogue from the first 100 unique products returned by the Tucker Fresh Broadway specials pages. It is deliberately a test MVP: Python scrapes and normalizes data, conservatively groups product families, synchronizes resized images to a private Backblaze B2 bucket, writes paged JSON, and Vite builds a framework-free TypeScript site for Cloudflare Pages. One narrow Pages Function serves authenticated B2 images through the same-origin `/images/*` route.
 
-It does not contain an API, database, admin dashboard, PWA, Service Worker, category system, search, accounts, or a frontend framework.
+It does not contain a general API, database, admin dashboard, PWA, Service Worker, category system, search, accounts, or a frontend framework.
 
 ## Local fixture build
 
@@ -46,19 +46,21 @@ All runtime configuration is read in `src/config.py`:
 | `LIST_PAGE_DELAY_MIN_SECONDS`, `LIST_PAGE_DELAY_MAX_SECONDS` | `3`, `6` |
 | `IMAGE_DELAY_MIN_SECONDS`, `IMAGE_DELAY_MAX_SECONDS` | `5`, `8` |
 | `IMAGE_TIMEOUT_SECONDS`, `IMAGE_MAX_ATTEMPTS` | `30`, `3` |
-| `B2_ENDPOINT`, `B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET` | B2 S3-compatible connection |
+| `B2_ENDPOINT`, `B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET` | Authenticated B2 S3-compatible upload connection |
 | `B2_PREFIX` | `test` |
-| `IMAGE_BASE_URL` | Public/CDN base URL for B2 image keys |
 | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_PAGES_PROJECT` | Deployment configuration used by CI |
 
 The test workflow pins `MAX_PRODUCTS=100` and `B2_PREFIX=test`. Adjust the delay variables rather than editing downloader code. The limited future full-catalogue extension is `MAX_PRODUCTS=`; no alternate scraper is needed.
 
 ## Backblaze B2 setup
 
-1. Create or choose a B2 bucket. Images must be reachable through a public bucket URL or a separately configured public CDN; use that URL as `B2_PUBLIC_BASE_URL`/`IMAGE_BASE_URL`.
-2. Create a bucket-scoped application key with read/write access needed for objects under `test/`. Do not commit or paste the key into source files.
-3. Use the bucket's S3 endpoint for `B2_ENDPOINT`, not the native B2 API URL.
-4. The pipeline stores images at `test/products/{product_id}/{url_hash}.webp` and its resumable manifest at `test/state/image-manifest.json`. The manifest is uploaded every five completed images and once at stage end.
+1. Create or choose a **private** B2 bucket. Do not change it to public.
+2. Create a bucket-scoped read/write application key for GitHub Actions. It needs the existing object and manifest operations under `test/`; store it only as the GitHub upload secrets described below.
+3. Create a separate application key for the Cloudflare Pages runtime. It must be bucket-restricted and **Read Only**, and should be restricted to the `test/products/` name prefix where practical. Never reuse the GitHub read/write key for Pages.
+4. Use the bucket's S3 endpoint for `B2_ENDPOINT`, not the native B2 API URL.
+5. The pipeline stores images at `test/products/{product_id}/{url_hash}.webp` and its resumable manifest at `test/state/image-manifest.json`. The manifest is uploaded every five completed images and once at stage end.
+
+Catalogue JSON contains only `image_key` values. The browser requests `/images/<image_key>`; `web/functions/images/[[path]].ts` validates the test-product path, signs a private S3-compatible GET with `aws4fetch`, streams the WebP response, and caches successful immutable image responses at Cloudflare. `Cache-Control: public` permits HTTP caches to store the proxy response—it does not make the B2 bucket public.
 
 To clear test data, first inspect the exact `test/` prefix in the B2 console or with a dry-run-capable tool, then delete only that prefix after confirming the target. Removing it is destructive and forces all images to download again.
 
@@ -66,26 +68,35 @@ To clear test data, first inspect the exact `test/` prefix in the B2 console or 
 
 1. In Cloudflare, create a Direct Upload Pages project named (recommended) `tucker-catalogue-test`.
 2. Create an API token with Account → Cloudflare Pages → Edit for the relevant account.
-3. The Vite production command is `npm run build`; its output directory is `output/site`. `web/wrangler.jsonc` records the same build output.
-4. CI deploys the prebuilt directory with Wrangler. There are no Pages Functions or Workers.
+3. In **Settings → Variables and Secrets**, configure both Production and Preview runtime environments:
+   - Plain variables: `B2_ENDPOINT`, `B2_BUCKET`
+   - Encrypted secrets: `B2_READ_KEY_ID`, `B2_READ_APPLICATION_KEY`
+4. The Vite production command is `npm run build`; its output directory is `output/site`. `web/wrangler.jsonc` records the same build output.
+5. CI runs Wrangler with `web/` as its working directory and deploys `../output/site`. Because `web/functions/` is present where Wrangler runs, the `/images/*` Pages Function is included. This is not a separate Worker project.
 
-## Required GitHub Actions secrets
+## Required GitHub Actions configuration
 
-Add these under **Repository → Settings → Secrets and variables → Actions → New repository secret**:
+Add these under **Repository → Settings → Secrets and variables → Actions**.
 
-- `B2_ENDPOINT`
+Secrets:
+
 - `B2_KEY_ID`
 - `B2_APPLICATION_KEY`
-- `B2_BUCKET`
-- `B2_PUBLIC_BASE_URL`
-- `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_API_TOKEN`
+
+Variables:
+
+- `B2_ENDPOINT`
+- `B2_BUCKET`
+- `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_PAGES_PROJECT`
+
+The Cloudflare Pages read-only B2 credentials belong only in the Pages project's encrypted runtime secrets, not in GitHub Actions or frontend build variables.
 
 ## First 100-product Action
 
 1. Push this repository, including `.github/workflows/update-catalogue.yml`, to the default branch.
-2. Complete the B2 and Cloudflare setup above and add all eight repository secrets.
+2. Complete the private-B2 and Cloudflare setup above, add the three GitHub secrets and four GitHub variables, and configure the four Pages runtime values.
 3. Open **GitHub → Actions → Update test catalogue**.
 4. Select **Run workflow**, choose the default branch, and select **Run workflow** again.
 5. Wait for the `update` job. It will test, scrape exactly the first 100 unique products when available, slowly process images, build, and deploy.
@@ -120,6 +131,8 @@ Flavor tokens used to form conservative exact family stems live in `config/group
 pytest
 cd web
 npm run typecheck
+npm run test:functions
+npm run typecheck:functions
 npm run build
 ```
 

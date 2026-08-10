@@ -33,7 +33,6 @@ class Settings:
     b2_application_key: str | None
     b2_bucket: str | None
     b2_prefix: str
-    image_base_url: str
     cloudflare_account_id: str | None
     cloudflare_api_token: str | None
     cloudflare_pages_project: str | None
@@ -64,9 +63,6 @@ class Settings:
             b2_application_key=os.getenv("B2_APPLICATION_KEY"),
             b2_bucket=os.getenv("B2_BUCKET"),
             b2_prefix=os.getenv("B2_PREFIX", "test").strip("/"),
-            image_base_url=os.getenv(
-                "IMAGE_BASE_URL", os.getenv("B2_PUBLIC_BASE_URL", "")
-            ).rstrip("/"),
             cloudflare_account_id=os.getenv("CLOUDFLARE_ACCOUNT_ID"),
             cloudflare_api_token=os.getenv("CLOUDFLARE_API_TOKEN"),
             cloudflare_pages_project=os.getenv("CLOUDFLARE_PAGES_PROJECT"),
@@ -80,7 +76,6 @@ class Settings:
                 "B2_KEY_ID": self.b2_key_id,
                 "B2_APPLICATION_KEY": self.b2_application_key,
                 "B2_BUCKET": self.b2_bucket,
-                "IMAGE_BASE_URL/B2_PUBLIC_BASE_URL": self.image_base_url,
             }.items()
             if not value
         ]

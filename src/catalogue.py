@@ -37,7 +37,6 @@ def build_catalogue(
     image_manifest: dict,
     page_size: int,
     source_product_count: int,
-    image_base_url: str,
 ) -> dict:
     family_groups: dict[str, list[PromotionGroup]] = defaultdict(list)
     for group in confirmed_offer_groups:
@@ -104,7 +103,6 @@ def build_catalogue(
             "page_size": page_size,
             "page_count": len(pages),
             "uncertain_start_page": uncertain_start_page,
-            "image_base_url": image_base_url,
             "pages": [f"data/pages/{index}.json" for index in range(1, len(pages) + 1)],
         },
         "pages": pages,
