@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+web/node_modules/
+output/*
+!output/.gitkeep
+web/public/data/*
+!web/public/data/.gitkeep
+.wrangler/

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "b2-cloud-storage": {
+      "source": "backblaze-labs/claude-skill-b2-cloud-storage",
+      "sourceType": "github",
+      "skillPath": "skills/b2-cloud-storage/SKILL.md",
+      "computedHash": "aa56d6b71fd598b7362b766dbe4363f74e9e81358b7c68c252c2942a0b06830b"
+    }
+  }
+}

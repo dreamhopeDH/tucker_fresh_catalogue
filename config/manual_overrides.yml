@@ -1,0 +1,3 @@
+# Product ID groups to force together, and product-ID pairs to keep separate.
+merge: []
+exclude: []
