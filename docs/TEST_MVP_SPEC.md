@@ -1021,7 +1021,7 @@ CLOUDFLARE_ACCOUNT_ID
 CLOUDFLARE_PAGES_PROJECT=tucker-catalogue-test
 ```
 
-Cloudflare Pages runtime Variables 为 `B2_ENDPOINT`、`B2_BUCKET`；Encrypted Secrets 为独立只读的 `B2_READ_KEY_ID`、`B2_READ_APPLICATION_KEY`。
+Cloudflare Pages runtime plaintext Variables `B2_ENDPOINT`、`B2_BUCKET` 定义在 Wrangler 配置的 `vars` 中。Cloudflare Dashboard 只配置独立只读的 Encrypted Secrets：`B2_READ_KEY_ID`、`B2_READ_APPLICATION_KEY`。不要把这两个 secret 写入 Wrangler 配置。
 
 B2 bucket 必须保持 private。Cloudflare Pages 运行时不得复用 GitHub Actions 的读写 B2 凭证。
 

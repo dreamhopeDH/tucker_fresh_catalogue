@@ -68,11 +68,10 @@ To clear test data, first inspect the exact `test/` prefix in the B2 console or 
 
 1. In Cloudflare, create a Direct Upload Pages project named (recommended) `tucker-catalogue-test`.
 2. Create an API token with Account → Cloudflare Pages → Edit for the relevant account.
-3. In **Settings → Variables and Secrets**, configure both Production and Preview runtime environments:
-   - Plain variables: `B2_ENDPOINT`, `B2_BUCKET`
-   - Encrypted secrets: `B2_READ_KEY_ID`, `B2_READ_APPLICATION_KEY`
-4. The Vite production command is `npm run build`; its output directory is `output/site`. `web/wrangler.jsonc` records the same build output.
-5. CI runs Wrangler with `web/` as its working directory and deploys `../output/site`. Because `web/functions/` is present where Wrangler runs, the `/images/*` Pages Function is included. This is not a separate Worker project.
+3. The Pages runtime plaintext variables `B2_ENDPOINT` and `B2_BUCKET` are defined in the top-level `vars` object in `web/wrangler.jsonc`. This Wrangler-managed project does not require those two values to be entered in the Cloudflare dashboard.
+4. In **Settings → Variables and Secrets**, configure the encrypted runtime secrets `B2_READ_KEY_ID` and `B2_READ_APPLICATION_KEY` for Production and Preview as appropriate. Do not put either secret in `wrangler.jsonc`.
+5. The Vite production command is `npm run build`; its output directory is `output/site`. `web/wrangler.jsonc` records the same build output.
+6. CI runs Wrangler with `web/` as its working directory and deploys `../output/site`. Because `web/functions/` is present where Wrangler runs, the `/images/*` Pages Function is included. This is not a separate Worker project.
 
 ## Required GitHub Actions configuration
 
@@ -91,12 +90,12 @@ Variables:
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_PAGES_PROJECT`
 
-The Cloudflare Pages read-only B2 credentials belong only in the Pages project's encrypted runtime secrets, not in GitHub Actions or frontend build variables.
+The Cloudflare Pages read-only B2 credentials belong only in the Pages project's encrypted runtime secrets, not in GitHub Actions, `wrangler.jsonc`, or frontend build variables. GitHub still needs its separate `B2_ENDPOINT` and `B2_BUCKET` repository variables because the upload pipeline and Pages Function run in separate environments.
 
 ## First 100-product Action
 
 1. Push this repository, including `.github/workflows/update-catalogue.yml`, to the default branch.
-2. Complete the private-B2 and Cloudflare setup above, add the three GitHub secrets and four GitHub variables, and configure the four Pages runtime values.
+2. Complete the private-B2 and Cloudflare setup above, add the three GitHub secrets and four GitHub variables, and configure the two encrypted Pages runtime secrets.
 3. Open **GitHub → Actions → Update test catalogue**.
 4. Select **Run workflow**, choose the default branch, and select **Run workflow** again.
 5. Wait for the `update` job. It will test, scrape exactly the first 100 unique products when available, slowly process images, build, and deploy.

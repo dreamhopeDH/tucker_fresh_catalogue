@@ -2,5 +2,9 @@
   "name": "tucker-catalogue-test",
   "pages_build_output_dir": "../output/site",
   "compatibility_date": "2026-08-10",
-  "compatibility_flags": ["nodejs_compat"]
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "B2_ENDPOINT": "https://s3.us-east-005.backblazeb2.com",
+    "B2_BUCKET": "tucker-fresh"
+  }
 }
