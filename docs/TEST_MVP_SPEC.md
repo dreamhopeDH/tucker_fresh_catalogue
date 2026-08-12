@@ -781,14 +781,27 @@ output/site/
         └── ...
 ```
 
-测试版每页默认 8 个展示单元。
+测试版每页默认 9 个展示单元。
 
 注意：
 
-* 一个已合并商品系列算一个展示单元；
-* 同一系列的不同促销区块仍放在同一张系列卡片内；
+* 一个促销一致的已合并商品系列算一个展示单元；
+* 同一系列的不同促销组分别成为展示单元，并按各自折扣分类；
 * standalone 商品算一个展示单元；
-* uncertain 商品放在最后的独立区域。
+* uncertain 商品进入自己的折扣组，但排在该组 confirmed/standalone 商品之后。
+
+展示单元按下列折扣组依次输出：
+
+1. `over_50`：折扣大于 50%；
+2. `exactly_50`：折扣正好等于 50%；
+3. `forty_to_under_50`：折扣大于等于 40% 且小于 50%；
+4. `under_40`：折扣小于 40%。
+
+分类使用 `regular_price_cents` 和 `special_price_cents` 的整数比较，不使用
+`saving_cents`。每个折扣组独立按 9 个展示单元分页，因此折扣组结束时允许页面未填满，
+下一个非空折扣组必须从新页面开始。组内 confirmed/standalone 和 uncertain 各自保留
+`source_order`；无法安全计算折扣的商品以 `discount_percent: null` 放到 `under_40`
+相应类型的末尾。
 
 `manifest.json` 示例：
 
@@ -799,13 +812,23 @@ output/site/
   "display_item_count": 82,
   "page_size": 9,
   "page_count": 11,
-  "uncertain_start_page": 10,
+  "discount_groups": [
+    {
+      "id": "over_50",
+      "label": "More than 50% off",
+      "item_count": 10,
+      "start_page": 1,
+      "page_count": 2
+    }
+  ],
   "pages": [
     "data/pages/1.json",
     "data/pages/2.json"
   ]
 }
 ```
+
+每个页面 JSON 明确包含 `discount_group` 和 `discount_group_label`，浏览器不重新计算折扣组。
 
 页面数据中图片只保存：
 

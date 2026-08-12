@@ -20,22 +20,36 @@ type CatalogueItem = {
   type: "family" | "product" | "uncertain";
   id: string;
   name: string;
+  discount_percent: number | null;
   products: ProductView[];
   offers: Offer[];
 };
 
-type PageData = { page: number; items: CatalogueItem[] };
+type PageData = {
+  page: number;
+  discount_group: string;
+  discount_group_label: string;
+  items: CatalogueItem[];
+};
+type DiscountGroupSummary = {
+  id: string;
+  label: string;
+  item_count: number;
+  start_page: number | null;
+  page_count: number;
+};
 type Manifest = {
   generated_at: string;
   page_count: number;
   pages: string[];
-  uncertain_start_page: number | null;
+  discount_groups: DiscountGroupSummary[];
 };
 
 const pagesElement = document.querySelector<HTMLDivElement>("#pages")!;
 const statusElement = document.querySelector<HTMLParagraphElement>("#status")!;
 const pageSelect = document.querySelector<HTMLSelectElement>("#page-select")!;
 const pageLabel = document.querySelector<HTMLSpanElement>("#page-label")!;
+const discountGroupLabel = document.querySelector<HTMLSpanElement>("#discount-group-label")!;
 const previousButton = document.querySelector<HTMLButtonElement>("#previous")!;
 const nextButton = document.querySelector<HTMLButtonElement>("#next")!;
 const firstButton = document.querySelector<HTMLButtonElement>("#first")!;
@@ -265,9 +279,18 @@ function unloadDistantPages(): void {
   });
 }
 
+function groupForPage(page: number): DiscountGroupSummary | undefined {
+  return manifest.discount_groups.find((group) =>
+    group.start_page !== null
+    && page >= group.start_page
+    && page < group.start_page + group.page_count
+  );
+}
+
 function updateControls(): void {
   pageSelect.value = String(currentPage);
   pageLabel.textContent = `Page ${currentPage} of ${manifest.page_count}`;
+  discountGroupLabel.textContent = groupForPage(currentPage)?.label ?? "Specials";
   previousButton.disabled = currentPage === 1;
   firstButton.disabled = currentPage === 1;
   nextButton.disabled = currentPage === manifest.page_count;
