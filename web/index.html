@@ -26,6 +26,15 @@
       <select id="page-select" aria-label="Jump to page"></select>
       <button id="next" type="button" aria-label="Next page">›</button>
     </nav>
+    <dialog id="product-dialog" class="product-dialog" aria-labelledby="product-dialog-title">
+      <div class="product-dialog-panel">
+        <button id="product-dialog-close" class="product-dialog-close" type="button" aria-label="Close product details">×</button>
+        <div class="product-dialog-scroll">
+          <h2 id="product-dialog-title"></h2>
+          <div id="product-dialog-content"></div>
+        </div>
+      </div>
+    </dialog>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

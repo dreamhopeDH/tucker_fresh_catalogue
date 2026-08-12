@@ -39,12 +39,18 @@ const pageLabel = document.querySelector<HTMLSpanElement>("#page-label")!;
 const previousButton = document.querySelector<HTMLButtonElement>("#previous")!;
 const nextButton = document.querySelector<HTMLButtonElement>("#next")!;
 const firstButton = document.querySelector<HTMLButtonElement>("#first")!;
+const productDialog = document.querySelector<HTMLDialogElement>("#product-dialog")!;
+const productDialogClose = document.querySelector<HTMLButtonElement>("#product-dialog-close")!;
+const productDialogTitle = document.querySelector<HTMLHeadingElement>("#product-dialog-title")!;
+const productDialogContent = document.querySelector<HTMLDivElement>("#product-dialog-content")!;
 const placeholderUrl = "./placeholder.svg";
 const loaded = new Set<number>();
 const loading = new Set<number>();
 let manifest: Manifest;
 let currentPage = 1;
 let scrollTimer = 0;
+let dialogCloseTimer = 0;
+let dialogOpener: HTMLElement | null = null;
 
 function money(cents: number | null): string {
   if (cents === null) return "—";
@@ -86,6 +92,95 @@ function priceBadge(offer: Offer): HTMLElement {
   return wrapper;
 }
 
+function promotionProductLabel(product: ProductView): string {
+  const label = product.variant || product.name;
+  return product.size && !label.toLowerCase().includes(product.size.toLowerCase())
+    ? `${label} (${product.size})`
+    : label;
+}
+
+function populateProductDialog(item: CatalogueItem): void {
+  productDialogTitle.textContent = item.name;
+  const gallery = document.createElement("div");
+  gallery.className = `product-dialog-gallery product-dialog-gallery--${Math.min(item.products.length, 3)}`;
+  item.products.forEach((product) => {
+    const figure = document.createElement("figure");
+    const image = makeImage(product);
+    image.loading = "eager";
+    const caption = document.createElement("figcaption");
+    const productName = document.createElement("strong");
+    productName.textContent = product.variant || product.name;
+    caption.append(productName);
+    if (product.size) {
+      const size = document.createElement("span");
+      size.textContent = product.size;
+      caption.append(size);
+    }
+    figure.append(image, caption);
+    gallery.append(figure);
+  });
+
+  const promotions = document.createElement("section");
+  promotions.className = "product-dialog-promotions";
+  promotions.setAttribute("aria-label", "Current promotions");
+  item.offers.forEach((offer, index) => {
+    const promotion = document.createElement("article");
+    promotion.className = "product-dialog-promotion";
+    if (item.offers.length > 1) {
+      const label = document.createElement("h3");
+      label.textContent = `Promotion ${index + 1}`;
+      promotion.append(label);
+    }
+    const price = document.createElement("div");
+    price.className = "product-dialog-price";
+    price.append(priceBadge(offer));
+    const details = document.createElement("div");
+    details.className = "product-dialog-offer-details";
+    if (offer.regular_price_cents !== null) {
+      const was = document.createElement("p");
+      was.textContent = `was ${money(offer.regular_price_cents)}`;
+      details.append(was);
+    }
+    if (offer.offer_text) {
+      const offerText = document.createElement("p");
+      offerText.className = "product-dialog-offer-text";
+      offerText.textContent = offer.offer_text;
+      details.append(offerText);
+    }
+    price.append(details);
+    promotion.append(price);
+
+    if (item.offers.length > 1 || item.products.length > 1) {
+      const appliesTo = document.createElement("p");
+      appliesTo.className = "product-dialog-applies";
+      const products = offer.product_ids
+        .map((productId) => item.products.find((product) => product.product_id === productId))
+        .filter((product): product is ProductView => Boolean(product))
+        .map(promotionProductLabel);
+      appliesTo.textContent = `Applies to: ${products.length ? products.join(" · ") : "listed products"}`;
+      promotion.append(appliesTo);
+    }
+    promotions.append(promotion);
+  });
+
+  productDialogContent.replaceChildren(gallery, promotions);
+}
+
+function openProductDialog(item: CatalogueItem, opener: HTMLElement): void {
+  window.clearTimeout(dialogCloseTimer);
+  productDialog.classList.remove("is-closing");
+  populateProductDialog(item);
+  dialogOpener = opener;
+  productDialog.showModal();
+  productDialogClose.focus();
+}
+
+function closeProductDialog(): void {
+  if (!productDialog.open || productDialog.classList.contains("is-closing")) return;
+  productDialog.classList.add("is-closing");
+  dialogCloseTimer = window.setTimeout(() => productDialog.close(), 160);
+}
+
 function renderCard(item: CatalogueItem): HTMLElement {
   const card = document.createElement("article");
   card.className = `product-card product-card--${item.type}`;
@@ -93,7 +188,13 @@ function renderCard(item: CatalogueItem): HTMLElement {
   visual.className = "product-visual";
   const images = document.createElement("div");
   images.className = "product-images";
-  item.products.slice(0, 3).forEach((product) => images.append(makeImage(product)));
+  const imageTrigger = document.createElement("button");
+  imageTrigger.className = "product-image-trigger";
+  imageTrigger.type = "button";
+  imageTrigger.setAttribute("aria-label", `View details for ${item.name}`);
+  item.products.slice(0, 3).forEach((product) => imageTrigger.append(makeImage(product)));
+  imageTrigger.addEventListener("click", () => openProductDialog(item, imageTrigger));
+  images.append(imageTrigger);
   const priceBlocks = document.createElement("div");
   priceBlocks.className = "price-blocks";
   item.offers.forEach((offer) => priceBlocks.append(priceBadge(offer)));
@@ -103,7 +204,13 @@ function renderCard(item: CatalogueItem): HTMLElement {
   const detail = document.createElement("div");
   detail.className = "product-detail";
   const heading = document.createElement("h2");
-  heading.textContent = item.name;
+  const nameTrigger = document.createElement("button");
+  nameTrigger.className = "product-name-trigger";
+  nameTrigger.type = "button";
+  nameTrigger.textContent = item.name;
+  nameTrigger.setAttribute("aria-label", `View details for ${item.name}`);
+  nameTrigger.addEventListener("click", () => openProductDialog(item, nameTrigger));
+  heading.append(nameTrigger);
   detail.append(heading);
   if (item.products.length > 1) {
     const variants = document.createElement("p");
@@ -222,5 +329,19 @@ previousButton.addEventListener("click", () => goToPage(currentPage - 1));
 nextButton.addEventListener("click", () => goToPage(currentPage + 1));
 firstButton.addEventListener("click", () => goToPage(1));
 pageSelect.addEventListener("change", () => goToPage(Number(pageSelect.value)));
+productDialogClose.addEventListener("click", closeProductDialog);
+productDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeProductDialog();
+});
+productDialog.addEventListener("click", (event) => {
+  if (event.target === productDialog) closeProductDialog();
+});
+productDialog.addEventListener("close", () => {
+  window.clearTimeout(dialogCloseTimer);
+  productDialog.classList.remove("is-closing");
+  if (dialogOpener?.isConnected) dialogOpener.focus();
+  dialogOpener = null;
+});
 
 void start();
