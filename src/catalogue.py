@@ -11,7 +11,7 @@ from .models import Product, PromotionGroup, UncertainProduct
 DISCOUNT_GROUPS = (
     ("over_50", "More than 50% off"),
     ("exactly_50", "Exactly 50% off"),
-    ("forty_to_under_50", "40% to less than 50% off"),
+    ("forty_to_under_50", "40% to 50% off"),
     ("under_40", "Less than 40% off"),
 )
 FALLBACK_DISCOUNT_GROUP = "under_40"
