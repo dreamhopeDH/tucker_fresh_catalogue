@@ -202,7 +202,7 @@ def test_manifest_keeps_all_group_metadata_and_image_keys(tmp_path: Path):
     assert catalogue["manifest"]["discount_groups"][0]["start_page"] is None
     assert catalogue["manifest"]["discount_groups"][1] == {
         "id": "exactly_50",
-        "label": "Exactly 50% off",
+        "label": "half price",
         "item_count": 1,
         "start_page": 1,
         "page_count": 1,
