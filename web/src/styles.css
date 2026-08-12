@@ -260,7 +260,7 @@ main { height: calc(100dvh - 112px); }
 }
 #discount-group-label {
   color: #7c160f;
-  font-size: 10px;
+  font-size: 12px;
 }
 #page-label { font-size: 9px; }
 .fatal-error { padding: 24px; }
