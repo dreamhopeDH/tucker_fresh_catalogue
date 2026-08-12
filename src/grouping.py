@@ -71,23 +71,32 @@ def group_products(
     remaining = [product for product in products if product.product_id not in assigned]
     uncertain_ids: set[str] = set()
     uncertain: list[UncertainProduct] = []
-    for index, product in enumerate(remaining):
-        best: tuple[float, Product] | None = None
-        for candidate in remaining[index + 1 :]:
-            if not product.size_text or product.size_text != candidate.size_text:
-                continue
-            if frozenset((product.product_id, candidate.product_id)) in excluded:
-                continue
-            score = float(ratio(product.family_stem, candidate.family_stem))
-            if score >= UNCERTAIN_SIMILARITY_THRESHOLD and (best is None or score > best[0]):
-                best = (score, candidate)
-        if best:
-            uncertain.append(UncertainProduct(product, best[1].product_id, best[0]))
-            uncertain.append(UncertainProduct(best[1], product.product_id, best[0]))
-            uncertain_ids.update((product.product_id, best[1].product_id))
+    fuzzy_candidates: dict[str, list[Product]] = defaultdict(list)
+    for product in remaining:
+        if product.size_text:
+            fuzzy_candidates[product.size_text].append(product)
+    for candidates in fuzzy_candidates.values():
+        for index, product in enumerate(candidates):
+            best: tuple[float, Product] | None = None
+            for candidate in candidates[index + 1 :]:
+                if frozenset((product.product_id, candidate.product_id)) in excluded:
+                    continue
+                score = float(ratio(product.family_stem, candidate.family_stem))
+                if score >= UNCERTAIN_SIMILARITY_THRESHOLD and (
+                    best is None or score > best[0]
+                ):
+                    best = (score, candidate)
+            if best:
+                uncertain.append(UncertainProduct(product, best[1].product_id, best[0]))
+                uncertain.append(UncertainProduct(best[1], product.product_id, best[0]))
+                uncertain_ids.update((product.product_id, best[1].product_id))
 
     unique_uncertain = {item.product.product_id: item for item in uncertain}
     standalone = [product for product in remaining if product.product_id not in uncertain_ids]
     families.sort(key=lambda family: min(p.source_order for p in family.products))
     standalone.sort(key=lambda product: product.source_order)
-    return GroupingResult(families, standalone, list(unique_uncertain.values()))
+    return GroupingResult(
+        families,
+        standalone,
+        sorted(unique_uncertain.values(), key=lambda item: item.product.source_order),
+    )

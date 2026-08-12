@@ -157,3 +157,60 @@ def test_404_is_missing_without_retry_and_429_honors_retry_after(tmp_path):
     assert retry_client.requests == 2
     assert sleeps == [12, 0]
     assert retry_stats["downloaded"] == 1
+
+
+def test_image_sync_budget_saves_progress_and_next_run_resumes(tmp_path):
+    clock = [0.0]
+
+    def monotonic():
+        return clock[0]
+
+    def sleep(seconds):
+        clock[0] += seconds
+
+    settings = replace(
+        Settings.from_env(),
+        output_directory=tmp_path,
+        b2_prefix="prod",
+        image_delay_min_seconds=6,
+        image_delay_max_seconds=6,
+        image_sync_budget_seconds=10,
+    )
+    products = [
+        make_product(f"p{index}", f"https://e/{index}.png", index) for index in range(3)
+    ]
+    store = FakeStore()
+    store.manifest = {}
+
+    manifest, first_stats = sync_images(
+        products,
+        store,
+        settings,
+        client=FakeClient(),
+        sleep=sleep,
+        monotonic=monotonic,
+    )
+    assert first_stats["downloaded"] == 2
+    assert first_stats["image_sync_complete"] is False
+    assert first_stats["stopped_after_budget"] is True
+    assert first_stats["remaining"] == 1
+    assert set(manifest) == {"p0", "p1"}
+    assert all(key.startswith("prod/products/") for key in store.images)
+    assert store.manifest_uploads >= 1
+
+    clock[0] = 0
+    resumed_client = FakeClient()
+    _, second_stats = sync_images(
+        products,
+        store,
+        replace(settings, image_sync_budget_seconds=100),
+        client=resumed_client,
+        sleep=sleep,
+        monotonic=monotonic,
+    )
+    assert resumed_client.requests == ["https://e/2.png"]
+    assert second_stats["skipped"] == 2
+    assert second_stats["downloaded"] == 1
+    assert second_stats["image_sync_complete"] is True
+    assert second_stats["stopped_after_budget"] is False
+    assert second_stats["remaining"] == 0

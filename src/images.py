@@ -56,6 +56,7 @@ def sync_images(
     settings: Settings,
     client: httpx.Client | None = None,
     sleep=time.sleep,
+    monotonic=time.monotonic,
 ) -> tuple[dict, dict[str, int | bool]]:
     manifest = store.download_manifest()
     stats: dict[str, int | bool] = {
@@ -64,6 +65,9 @@ def sync_images(
         "missing": 0,
         "failed": 0,
         "stopped_after_failures": False,
+        "image_sync_complete": True,
+        "stopped_after_budget": False,
+        "remaining": 0,
     }
     owned_client = client is None
     client = client or httpx.Client(
@@ -74,6 +78,7 @@ def sync_images(
     work_directory = settings.output_directory / ".image-work"
     completed_since_upload = 0
     consecutive_failures = 0
+    started_at = monotonic()
 
     try:
         for index, product in enumerate(sorted(products, key=lambda item: item.source_order), start=1):
@@ -100,6 +105,20 @@ def sync_images(
                 object_key = image_object_key(settings.b2_prefix, product.product_id, product.image_url)
                 status = "failed"
                 for attempt in range(1, settings.image_max_attempts + 1):
+                    if (
+                        settings.image_sync_budget_seconds is not None
+                        and monotonic() - started_at >= settings.image_sync_budget_seconds
+                    ):
+                        stats["image_sync_complete"] = False
+                        stats["stopped_after_budget"] = True
+                        stats["remaining"] = len(products) - index + 1
+                        LOGGER.warning(
+                            "Image sync budget reached before request %s/%s; %s products remain",
+                            index,
+                            len(products),
+                            stats["remaining"],
+                        )
+                        break
                     response = None
                     try:
                         response = client.get(product.image_url)
@@ -136,6 +155,9 @@ def sync_images(
                         break
                     if attempt == settings.image_max_attempts:
                         status = "failed"
+
+                if stats["stopped_after_budget"]:
+                    break
 
                 manifest[product.product_id] = {
                     "source_image_url": product.image_url,

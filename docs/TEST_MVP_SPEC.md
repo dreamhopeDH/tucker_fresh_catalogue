@@ -1,3 +1,9 @@
+# Historical specification: Tucker Fresh 100-product test MVP
+
+> This document is retained as the historical Phase 1 specification and is no
+> longer active. The production source of truth is `docs/PRODUCTION_SPEC.md`.
+> Do not use the test-only limits or `test/` namespace below for production.
+
 # Tucker Fresh 折扣广告册——100 件商品测试版开发任务书
 
 ## 1. 你的任务

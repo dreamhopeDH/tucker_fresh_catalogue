@@ -1,4 +1,4 @@
-name: Update test catalogue
+name: Update production catalogue
 
 on:
   workflow_dispatch:
@@ -10,17 +10,18 @@ permissions:
   deployments: write
 
 concurrency:
-  group: tucker-catalogue-test-update
+  group: tucker-catalogue-production-update
   cancel-in-progress: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 350
     env:
-      MAX_PRODUCTS: "100"
+      MAX_PRODUCTS: "none"
       PAGE_SIZE: "9"
-      B2_PREFIX: test
+      B2_PREFIX: prod
+      IMAGE_SYNC_BUDGET_SECONDS: "18000"
       B2_ENDPOINT: ${{ vars.B2_ENDPOINT }}
       B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
       B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
@@ -64,10 +65,21 @@ jobs:
         working-directory: web
         run: npm run test:functions && npm run typecheck:functions
 
-      - name: Scrape and build catalogue data
+      - name: Scrape and prepare catalogue data
         run: python -m src.main
 
+      - name: Check deployment readiness
+        id: readiness
+        run: |
+          if jq -e '.stopped_after_budget == true' output/run-summary.json >/dev/null; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Image warm-up is incomplete. Progress has been saved to the B2 manifest. Run the workflow again to continue. No new catalogue was deployed."
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build production site
+        if: steps.readiness.outputs.deploy == 'true'
         working-directory: web
         run: npm run build
 
@@ -82,8 +94,10 @@ jobs:
             output/normalized-products.json
             output/grouping-result.json
             output/catalogue-manifest.json
+            output/run-summary.json
 
       - name: Deploy to Cloudflare Pages
+        if: steps.readiness.outputs.deploy == 'true'
         id: deploy
         uses: cloudflare/wrangler-action@v4
         with:
@@ -98,22 +112,31 @@ jobs:
         env:
           DEPLOY_RESULT: ${{ steps.deploy.outcome }}
         run: |
-          echo "## Tucker Fresh test catalogue" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Tucker Fresh production catalogue" >> "$GITHUB_STEP_SUMMARY"
           if test -f output/run-summary.json; then
             echo "| Metric | Result |" >> "$GITHUB_STEP_SUMMARY"
             echo "|---|---:|" >> "$GITHUB_STEP_SUMMARY"
-            echo "| Requested product limit | $(jq -r '.requested_product_limit' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Mode | $(jq -r 'if .mode == "full" then "Full catalogue" else "Limited catalogue" end' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Source-advertised products | $(jq -r '.source_advertised_product_count // "unknown"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Products scraped | $(jq -r '.actual_product_count' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Confirmed families | $(jq -r '.confirmed_family_count' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Standalone products | $(jq -r '.standalone_product_count' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Uncertain products | $(jq -r '.uncertain_product_count' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
-            echo "| Images downloaded | $(jq -r '.downloaded' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
-            echo "| Images skipped | $(jq -r '.skipped' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Display items | $(jq -r '.display_item_count // "pending"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| More than 50% off | $(jq -r '[.discount_groups[]? | select(.id == "over_50") | .item_count][0] // "pending"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Half price | $(jq -r '[.discount_groups[]? | select(.id == "exactly_50") | .item_count][0] // "pending"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| 40% to 50% off | $(jq -r '[.discount_groups[]? | select(.id == "forty_to_under_50") | .item_count][0] // "pending"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Less than 40% off | $(jq -r '[.discount_groups[]? | select(.id == "under_40") | .item_count][0] // "pending"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Images downloaded this run | $(jq -r '.downloaded' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Images skipped from manifest | $(jq -r '.skipped' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Images missing | $(jq -r '.missing' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Images failed | $(jq -r '.failed' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
-            echo "| Final pages | $(jq -r '.page_count' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
-            if test "$(jq -r '.actual_product_count' output/run-summary.json)" -lt "$(jq -r '.requested_product_limit' output/run-summary.json)"; then
-              echo "> [!WARNING] Fewer products were scraped than requested." >> "$GITHUB_STEP_SUMMARY"
+            echo "| Image sync complete | $(jq -r '.image_sync_complete' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Stopped after budget | $(jq -r '.stopped_after_budget' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Current products remaining | $(jq -r '.remaining' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Final pages | $(jq -r '.page_count // "pending"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            if test "$(jq -r '.stopped_after_budget' output/run-summary.json)" = "true"; then
+              echo "> [!IMPORTANT] Image warm-up is incomplete. Progress has been saved to the B2 manifest. Run the workflow again to continue. No new catalogue was deployed." >> "$GITHUB_STEP_SUMMARY"
             fi
             if test "$(jq -r '.stopped_after_failures' output/run-summary.json)" = "true"; then
               echo "> [!WARNING] Image requests stopped after 10 consecutive failures." >> "$GITHUB_STEP_SUMMARY"

@@ -4,8 +4,9 @@ import logging
 import random
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -16,6 +17,18 @@ from .normalize import normalize_product_url
 
 LOGGER = logging.getLogger(__name__)
 TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+
+
+@dataclass(frozen=True)
+class ScrapeResult:
+    products: list[RawProduct]
+    advertised_product_count: int | None
+
+
+@dataclass(frozen=True)
+class PaginationMetadata:
+    advertised_product_count: int | None
+    next_url: str | None
 
 
 def parse_price_cents(value: str | None) -> int | None:
@@ -120,11 +133,29 @@ def parse_specials_page(html: str, page_url: str, source_order: int = 0) -> list
     return products
 
 
-def _page_url(base_url: str, page: int) -> str:
-    parts = urlsplit(base_url)
-    query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    query["page"] = str(page)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+def parse_pagination_metadata(html: str, page_url: str) -> PaginationMetadata:
+    soup = BeautifulSoup(html, "html.parser")
+    results_match = re.search(r"\b([\d,]+)\s+results\b", soup.get_text(" ", strip=True), re.I)
+    advertised_count = (
+        int(results_match.group(1).replace(",", "")) if results_match else None
+    )
+    next_link = soup.select_one(
+        '[role="navigation"][aria-label="Pagination"] a[rel~="next"]'
+    )
+    if not next_link or not next_link.get("href"):
+        return PaginationMetadata(advertised_count, None)
+
+    next_url = urljoin(page_url, str(next_link.get("href")))
+    current_parts = urlsplit(page_url)
+    next_parts = urlsplit(next_url)
+    if (
+        next_parts.scheme not in {"http", "https"}
+        or next_parts.scheme != current_parts.scheme
+        or next_parts.netloc != current_parts.netloc
+        or next_parts.path != current_parts.path
+    ):
+        raise ValueError("Specials pagination contained an unsafe next-page URL")
+    return PaginationMetadata(advertised_count, next_url)
 
 
 def fetch_specials(
@@ -134,7 +165,7 @@ def fetch_specials(
     delay_max_seconds: float = 6,
     client: httpx.Client | None = None,
     sleep=time.sleep,
-) -> list[RawProduct]:
+) -> ScrapeResult:
     owned_client = client is None
     client = client or httpx.Client(
         headers={"User-Agent": "PersonalTuckerCatalogue/0.1"},
@@ -144,14 +175,19 @@ def fetch_specials(
     products: list[RawProduct] = []
     seen: set[str] = set()
     page = 1
+    page_url = source_url
+    advertised_product_count: int | None = None
+    visited_urls: set[str] = set()
     try:
         while max_products is None or len(products) < max_products:
-            url = source_url if page == 1 else _page_url(source_url, page)
+            if page_url in visited_urls:
+                raise RuntimeError("Specials pagination looped to a previously requested URL")
+            visited_urls.add(page_url)
             response = None
             last_transport_error: httpx.TransportError | None = None
             for attempt in range(3):
                 try:
-                    response = client.get(url)
+                    response = client.get(page_url)
                 except httpx.TransportError as error:
                     last_transport_error = error
                     sleep(random.uniform(delay_min_seconds, delay_max_seconds))
@@ -168,6 +204,16 @@ def fetch_specials(
                     raise last_transport_error
                 raise RuntimeError("List page request did not return a response")
             response.raise_for_status()
+            pagination = parse_pagination_metadata(response.text, str(response.url))
+            if pagination.advertised_product_count is not None:
+                if advertised_product_count is None:
+                    advertised_product_count = pagination.advertised_product_count
+                elif pagination.advertised_product_count != advertised_product_count:
+                    raise RuntimeError(
+                        "Source result count changed during pagination: "
+                        f"expected {advertised_product_count}, page {page} advertised "
+                        f"{pagination.advertised_product_count}"
+                    )
             page_products = parse_specials_page(response.text, str(response.url), len(products))
             added = 0
             for raw in page_products:
@@ -180,12 +226,42 @@ def fetch_specials(
                 added += 1
                 if max_products is not None and len(products) >= max_products:
                     break
-            if not page_products or added == 0:
+            LOGGER.info(
+                "Page %s: %s parsed, %s unique, %s cumulative",
+                page,
+                len(page_products),
+                added,
+                len(products),
+            )
+            if max_products is not None and len(products) >= max_products:
                 break
+            if added == 0:
+                raise RuntimeError(
+                    f"Specials page {page} added no unique products before the catalogue ended"
+                )
+            if pagination.next_url is None:
+                expected_for_run = None
+                if advertised_product_count is not None:
+                    expected_for_run = (
+                        advertised_product_count
+                        if max_products is None
+                        else min(max_products, advertised_product_count)
+                    )
+                if expected_for_run is not None and len(products) != expected_for_run:
+                    raise RuntimeError(
+                        "Specials scrape was incomplete: source advertised "
+                        f"{advertised_product_count} products but {len(products)} unique products "
+                        "were collected"
+                    )
+                LOGGER.info("Final page: %s", page)
+                break
+            page_url = pagination.next_url
             page += 1
     finally:
         if owned_client:
             client.close()
     if not products:
         raise RuntimeError("Scrape produced no products; refusing to build an empty catalogue")
-    return products
+    LOGGER.info("Expected source products: %s", advertised_product_count or "unknown")
+    LOGGER.info("Actual unique products: %s", len(products))
+    return ScrapeResult(products, advertised_product_count)

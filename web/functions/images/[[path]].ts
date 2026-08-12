@@ -3,13 +3,18 @@ import { AwsClient } from "aws4fetch";
 interface Env {
   B2_ENDPOINT: string;
   B2_BUCKET: string;
+  B2_IMAGE_PREFIX: string;
   B2_READ_KEY_ID: string;
   B2_READ_APPLICATION_KEY: string;
 }
 
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 
-export function normalizeObjectKey(path: string | string[] | undefined): string | null {
+export function normalizeObjectKey(
+  path: string | string[] | undefined,
+  allowedPrefix: string,
+): string | null {
+  if (!allowedPrefix || !/^[a-z0-9_-]+$/i.test(allowedPrefix)) return null;
   const rawSegments = Array.isArray(path) ? path : path ? path.split("/") : [];
   const segments: string[] = [];
 
@@ -34,10 +39,15 @@ export function normalizeObjectKey(path: string | string[] | undefined): string 
   }
 
   const key = segments.join("/");
-  if (segments.length < 4 || segments[0] !== "test" || segments[1] !== "products") {
+  if (
+    segments.length !== 4
+    || segments[0] !== allowedPrefix
+    || segments[1] !== "products"
+    || !/^[a-f0-9]{16}\.webp$/i.test(segments[3])
+  ) {
     return null;
   }
-  return key.endsWith(".webp") ? key : null;
+  return key;
 }
 
 export function buildB2Target(
@@ -81,7 +91,7 @@ export const onRequest: PagesFunction<Env, "path"> = async (context) => {
     });
   }
 
-  const objectKey = normalizeObjectKey(context.params.path);
+  const objectKey = normalizeObjectKey(context.params.path, context.env.B2_IMAGE_PREFIX);
   if (!objectKey) {
     return new Response("Invalid image path", { status: 400 });
   }

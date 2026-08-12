@@ -17,6 +17,15 @@ def _optional_int(name: str, default: int | None) -> int | None:
     return int(value)
 
 
+def _optional_float(name: str, default: float | None) -> float | None:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    if value.strip().lower() in {"", "none"}:
+        return None
+    return float(value)
+
+
 @dataclass(frozen=True)
 class Settings:
     source_specials_url: str
@@ -28,6 +37,7 @@ class Settings:
     image_delay_max_seconds: float
     image_timeout_seconds: float
     image_max_attempts: int
+    image_sync_budget_seconds: float | None
     b2_endpoint: str | None
     b2_key_id: str | None
     b2_application_key: str | None
@@ -58,6 +68,7 @@ class Settings:
             image_delay_max_seconds=float(os.getenv("IMAGE_DELAY_MAX_SECONDS", "8")),
             image_timeout_seconds=float(os.getenv("IMAGE_TIMEOUT_SECONDS", "30")),
             image_max_attempts=int(os.getenv("IMAGE_MAX_ATTEMPTS", "3")),
+            image_sync_budget_seconds=_optional_float("IMAGE_SYNC_BUDGET_SECONDS", None),
             b2_endpoint=os.getenv("B2_ENDPOINT"),
             b2_key_id=os.getenv("B2_KEY_ID"),
             b2_application_key=os.getenv("B2_APPLICATION_KEY"),
@@ -91,3 +102,8 @@ class Settings:
             raise ValueError("List page delay minimum exceeds maximum")
         if self.image_delay_min_seconds > self.image_delay_max_seconds:
             raise ValueError("Image delay minimum exceeds maximum")
+        if (
+            self.image_sync_budget_seconds is not None
+            and self.image_sync_budget_seconds <= 0
+        ):
+            raise ValueError("IMAGE_SYNC_BUDGET_SECONDS must be positive or empty")

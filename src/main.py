@@ -36,12 +36,18 @@ def run(fixture: Path | None = None, skip_images: bool = False) -> dict:
     overrides = load_manual_overrides(ROOT / "config" / "manual_overrides.yml")
 
     LOGGER.info("SCRAPE")
-    raw_products = _load_fixture(fixture) if fixture else fetch_specials(
-        source_url=settings.source_specials_url,
-        max_products=settings.max_products,
-        delay_min_seconds=settings.list_page_delay_min_seconds,
-        delay_max_seconds=settings.list_page_delay_max_seconds,
-    )
+    if fixture:
+        raw_products = _load_fixture(fixture)
+        advertised_product_count = None
+    else:
+        scrape_result = fetch_specials(
+            source_url=settings.source_specials_url,
+            max_products=settings.max_products,
+            delay_min_seconds=settings.list_page_delay_min_seconds,
+            delay_max_seconds=settings.list_page_delay_max_seconds,
+        )
+        raw_products = scrape_result.products
+        advertised_product_count = scrape_result.advertised_product_count
     if settings.max_products is not None:
         raw_products = raw_products[: settings.max_products]
     _write_json(settings.output_directory / "raw-products.json", [asdict(item) for item in raw_products])
@@ -71,6 +77,9 @@ def run(fixture: Path | None = None, skip_images: bool = False) -> dict:
             "missing": len(products),
             "failed": 0,
             "stopped_after_failures": False,
+            "image_sync_complete": True,
+            "stopped_after_budget": False,
+            "remaining": 0,
         }
     else:
         settings.require_b2()
@@ -83,6 +92,27 @@ def run(fixture: Path | None = None, skip_images: bool = False) -> dict:
         )
         image_manifest, image_stats = sync_images(products, store, settings)
 
+    summary = {
+        "mode": "full" if settings.max_products is None else "limited",
+        "requested_product_limit": settings.max_products,
+        "source_advertised_product_count": advertised_product_count,
+        "actual_product_count": len(products),
+        "confirmed_family_count": len(grouping.confirmed_families),
+        "standalone_product_count": len(grouping.standalone_products),
+        "uncertain_product_count": len(grouping.uncertain_products),
+        **image_stats,
+        "display_item_count": None,
+        "discount_groups": [],
+        "page_count": None,
+    }
+    if image_stats["stopped_after_budget"]:
+        _write_json(settings.output_directory / "run-summary.json", summary)
+        LOGGER.warning(
+            "Image warm-up is incomplete. Progress has been saved to the B2 manifest. "
+            "Run the workflow again to continue. No new catalogue was deployed."
+        )
+        return summary
+
     LOGGER.info("BUILD_CATALOGUE")
     catalogue = build_catalogue(
         confirmed_offer_groups=offer_groups,
@@ -94,21 +124,19 @@ def run(fixture: Path | None = None, skip_images: bool = False) -> dict:
     )
     write_catalogue_files(catalogue, settings.site_data_directory)
     _write_json(settings.output_directory / "catalogue-manifest.json", catalogue["manifest"])
-    summary = {
-        "requested_product_limit": settings.max_products,
-        "actual_product_count": len(products),
-        "confirmed_family_count": len(grouping.confirmed_families),
-        "standalone_product_count": len(grouping.standalone_products),
-        "uncertain_product_count": len(grouping.uncertain_products),
-        **image_stats,
-        "page_count": catalogue["manifest"]["page_count"],
-    }
+    summary.update(
+        {
+            "display_item_count": catalogue["manifest"]["display_item_count"],
+            "discount_groups": catalogue["manifest"]["discount_groups"],
+            "page_count": catalogue["manifest"]["page_count"],
+        }
+    )
     _write_json(settings.output_directory / "run-summary.json", summary)
     return summary
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build the Tucker Fresh test catalogue")
+    parser = argparse.ArgumentParser(description="Build the Tucker Fresh catalogue")
     parser.add_argument("--fixture", type=Path, help="Read RawProduct JSON instead of the live site")
     parser.add_argument("--skip-images", action="store_true", help="Use placeholders; intended for local debugging")
     args = parser.parse_args()
