@@ -2,10 +2,11 @@
 
 This repository builds a mobile-first static catalogue from the complete current
 Tucker Fresh Broadway specials listing. Python performs a deliberately slow,
-sequential scrape, normalization, conservative family and promotion grouping,
-four-way discount grouping, private image synchronization, and paged JSON
-generation. Vite builds a framework-free TypeScript frontend for the existing
-Cloudflare Pages project.
+sequential bidirectional-alphabetical scrape, exact completeness validation,
+normalization, conservative family and promotion grouping, four-way discount
+grouping, deterministic random display ordering, private image synchronization,
+and paged JSON generation. Vite builds a framework-free TypeScript frontend for
+the existing Cloudflare Pages project.
 
 The browser never reads Backblaze B2 directly. Product images stay in a private
 B2 bucket and are served through the authenticated same-origin `/images/*`
@@ -77,19 +78,25 @@ must remain `none`, not a guessed numeric catalogue size.
 
 ## Production pagination safety
 
-The scraper follows the exact server-rendered `rel="next"` URL and records the
-source-advertised result count. An unlimited run deploys only after the actual
-unique product count matches that advertised total. Unexpected empty markup,
-pagination loops, changing result counts, and truncated final results fail
-loudly before deployment.
+Myfoodlink exposes only 50 pages of 48 products from one large sorted query,
+even when it advertises a larger result set. Production therefore retrieves the
+public `Name A-Z` (`sort_by=name`) and `Name Z-A`
+(`sort_by=name_descending`) windows sequentially. It follows each sort's real
+`rel="next"` links but stops at page 50 without requesting the unusable page 51.
+If Name A-Z already contains the advertised total, Name Z-A is skipped.
 
-During the production promotion audit on 12 August 2026, the live source
-advertised 3,754 results, rendered valid pages through page 50, linked to page
-51, and returned a zero-result page at page 51. If that upstream deep-pagination
-cap remains, the production Action will intentionally fail its completeness
-check rather than publish a truncated catalogue. Do not bypass this protection
-by weakening the count check or changing the sort order, because the latter
-would lose Tucker Fresh's required source ordering.
+The windows are deduplicated by stable source product ID, falling back to
+normalized product URL only when an ID is unavailable. Overlapping copies must
+agree on material product and promotion fields. The advertised count must stay
+constant, and the final unique union must equal it exactly. Any conflict,
+changing count, malformed page, or incomplete union fails before image work and
+deployment.
+
+Retrieval order is not display order. After canonical internal ordering, items
+are randomized deterministically inside each of the four discount groups. The
+seed is exactly the source-advertised specials count, and generated metadata
+records the ordering mode and seed. The same complete input and count produce
+the same pages across image warm-up reruns.
 
 ## Backblaze B2 production setup
 
@@ -192,9 +199,11 @@ is Monday 04:17 in Perth. There is no push trigger.
 3. Confirm the Cloudflare read-only B2 key can access `prod/products/`.
 4. Open **GitHub → Actions → Update production catalogue**.
 5. Select **Run workflow**, choose `main`, and run it.
-6. The Action runs tests, scrapes the full current source, validates
-   completeness, groups products, and begins the sequential image warm-up.
-7. If the five-hour image budget is reached, the Action saves
+6. The Action runs tests, recovers the source through Name A-Z and, when
+   required, Name Z-A, validates the exact union count, deterministically orders
+   the catalogue, and begins the sequential image warm-up.
+7. If the five-hour image budget or 10-consecutive-failure guard stops traversal,
+   the Action saves
    `prod/state/image-manifest.json`, reports the approximate remaining count,
    skips build/deployment, and leaves the currently deployed site untouched.
 8. Manually run the workflow again. It re-scrapes current specials, quickly
@@ -210,8 +219,9 @@ gh workflow run update-catalogue.yml --ref main
 gh run watch
 ```
 
-The run summary reports source and actual counts, grouping totals, four discount
-group counts, pages, image progress, budget status, and deployment result. The
+The run summary reports alphabetical retrieval counts and overlap, source and
+actual counts, ordering seed, grouping totals, four discount-group counts,
+pages, image traversal status, and deployment result. The
 `catalogue-debug-<run number>` artifact includes:
 
 - `output/raw-products.json`
@@ -241,7 +251,10 @@ The four exact discount boundaries remain:
 Each group starts on a new page. Promotion groups in the same family remain
 separate when their prices or offer text differ. Current prices and group
 membership are rebuilt from the live source each week; B2 persists image reuse
-state only, not price history.
+state only, not price history. Items are deterministically randomized within
+each group, while normal items remain ahead of uncertain items and invalid-price
+fallback boundaries remain intact. Randomization occurs in Python, never in the
+browser.
 
 ## Grouping overrides
 

@@ -3,7 +3,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-from src.scrape import fetch_specials, parse_pagination_metadata, parse_specials_page
+from src.scrape import (
+    NAME_ASCENDING_SORT,
+    NAME_DESCENDING_SORT,
+    fetch_specials,
+    parse_pagination_metadata,
+    parse_specials_page,
+)
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "specials-page.html"
@@ -29,6 +35,32 @@ def product_cards(start: int, count: int) -> str:
         f'data-product-url="/products/{index}" data-regular-price="$2" '
         f'data-special-price="$1"></article>'
         for index in range(start, start + count)
+    )
+
+
+def named_product_cards(ids: list[str], *, conflicting_id: str | None = None) -> str:
+    return "".join(
+        f'<article data-product-id="{product_id}" '
+        f'data-product-name="Product {product_id}" '
+        f'data-product-url="/products/{product_id}" data-regular-price="$2" '
+        f'data-special-price="{("$1.25" if product_id == conflicting_id else "$1")}"></article>'
+        for product_id in ids
+    )
+
+
+def alphabetical_page(
+    ids: list[str], total: int, sort_by: str, next_page: int | None
+) -> str:
+    next_link = (
+        f'<a rel="next" href="/search?page={next_page}&amp;q%5B%5D=special%3A1'
+        f'&amp;sort_by={sort_by}">Next</a>'
+        if next_page is not None
+        else ""
+    )
+    return (
+        named_product_cards(ids)
+        + f'<div class="search-results__header"><span>{total} results</span></div>'
+        + f'<div role="navigation" aria-label="Pagination">{next_link}</div>'
     )
 
 
@@ -91,14 +123,16 @@ def test_pagination_deduplicates_and_stops_at_limit():
     assert len(calls) == 2
 
 
-def test_unlimited_pagination_collects_all_unique_products_in_source_order():
-    pages = [
-        with_pagination(product_cards(0, 2), 4, 2),
-        with_pagination(product_cards(2, 2), 4, None),
-    ]
+def test_full_recovery_stops_after_name_az_when_one_window_is_complete():
+    calls = []
 
     def handler(request: httpx.Request):
-        return httpx.Response(200, text=pages.pop(0), request=request)
+        calls.append(str(request.url))
+        return httpx.Response(
+            200,
+            text=alphabetical_page(["a", "b", "c", "d"], 4, NAME_ASCENDING_SORT, None),
+            request=request,
+        )
 
     result = fetch_specials(
         "https://example.test/specials",
@@ -108,21 +142,61 @@ def test_unlimited_pagination_collects_all_unique_products_in_source_order():
         client=httpx.Client(transport=httpx.MockTransport(handler)),
         sleep=lambda _: None,
     )
-    assert result.advertised_product_count == 4
-    assert [product.source_product_id for product in result.products] == ["0", "1", "2", "3"]
-    assert [product.source_order for product in result.products] == [0, 1, 2, 3]
+
+    assert result.retrieval_strategy == "name_az"
+    assert result.name_az_unique_count == 4
+    assert result.name_za_unique_count is None
+    assert result.final_union_unique_count == 4
+    assert len(calls) == 1
+    assert calls[0] == (
+        "https://example.test/search?q%5B%5D=special%3A1&sort_by=name"
+    )
 
 
-def test_unlimited_pagination_fails_on_unexpected_non_terminal_markup():
-    pages = [
-        with_pagination(product_cards(0, 2), 4, 2),
-        with_pagination("<p>Unexpected response</p>", 4, None),
-    ]
+def test_full_recovery_unions_both_alphabetical_directions():
+    calls = []
 
     def handler(request: httpx.Request):
-        return httpx.Response(200, text=pages.pop(0), request=request)
+        calls.append(str(request.url))
+        sort_by = request.url.params["sort_by"]
+        ids = ["a", "b", "c", "d", "e"] if sort_by == NAME_ASCENDING_SORT else ["h", "g", "f", "e", "d"]
+        return httpx.Response(
+            200,
+            text=alphabetical_page(ids, 8, sort_by, 2),
+            request=request,
+        )
 
-    with pytest.raises(ValueError, match="no product cards"):
+    result = fetch_specials(
+        "https://example.test/specials",
+        None,
+        0,
+        0,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sleep=lambda _: None,
+        result_window_pages=1,
+    )
+
+    assert [product.source_product_id for product in result.products] == list("abcdefgh")
+    assert [product.source_order for product in result.products] == list(range(8))
+    assert result.retrieval_strategy == "name_az_plus_name_za"
+    assert result.name_az_unique_count == 5
+    assert result.name_za_unique_count == 5
+    assert result.alphabetical_overlap_count == 2
+    assert result.final_union_unique_count == 8
+    assert len(calls) == 2
+
+
+def test_full_recovery_rejects_an_incomplete_union():
+    def handler(request: httpx.Request):
+        sort_by = request.url.params["sort_by"]
+        ids = ["a", "b", "c", "d", "e"] if sort_by == NAME_ASCENDING_SORT else ["h", "g", "f", "e", "d"]
+        return httpx.Response(
+            200,
+            text=alphabetical_page(ids, 9, sort_by, 2),
+            request=request,
+        )
+
+    with pytest.raises(RuntimeError, match="union contained 8 unique products"):
         fetch_specials(
             "https://example.test/specials",
             None,
@@ -130,18 +204,91 @@ def test_unlimited_pagination_fails_on_unexpected_non_terminal_markup():
             0,
             client=httpx.Client(transport=httpx.MockTransport(handler)),
             sleep=lambda _: None,
+            result_window_pages=1,
         )
 
 
-def test_unlimited_pagination_rejects_suspiciously_short_final_count():
+def test_full_recovery_rejects_count_change_between_directions():
     def handler(request: httpx.Request):
+        sort_by = request.url.params["sort_by"]
+        total = 8 if sort_by == NAME_ASCENDING_SORT else 9
+        ids = ["a", "b", "c", "d", "e"] if sort_by == NAME_ASCENDING_SORT else ["h", "g", "f", "e", "d"]
         return httpx.Response(
             200,
-            text=with_pagination(product_cards(0, 2), 3, None),
+            text=alphabetical_page(ids, total, sort_by, 2),
             request=request,
         )
 
-    with pytest.raises(RuntimeError, match="advertised 3 products but 2"):
+    with pytest.raises(RuntimeError, match="page 1 advertised 9"):
+        fetch_specials(
+            "https://example.test/specials",
+            None,
+            0,
+            0,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            sleep=lambda _: None,
+            result_window_pages=1,
+        )
+
+
+def test_full_recovery_rejects_materially_conflicting_duplicate():
+    def handler(request: httpx.Request):
+        sort_by = request.url.params["sort_by"]
+        ids = ["a", "b", "c"] if sort_by == NAME_ASCENDING_SORT else ["d", "c", "b"]
+        html = alphabetical_page(ids, 4, sort_by, 2)
+        if sort_by == NAME_DESCENDING_SORT:
+            html = html.replace('data-special-price="$1"', 'data-special-price="$1.25"', 2)
+        return httpx.Response(200, text=html, request=request)
+
+    with pytest.raises(RuntimeError, match="materially conflicting copies"):
+        fetch_specials(
+            "https://example.test/specials",
+            None,
+            0,
+            0,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            sleep=lambda _: None,
+            result_window_pages=1,
+        )
+
+
+def test_full_recovery_never_requests_page_51():
+    calls = []
+
+    def handler(request: httpx.Request):
+        calls.append(str(request.url))
+        sort_by = request.url.params["sort_by"]
+        page = int(request.url.params.get("page", "1"))
+        product_id = page - 1 if sort_by == NAME_ASCENDING_SORT else 75 - page
+        return httpx.Response(
+            200,
+            text=alphabetical_page([str(product_id)], 75, sort_by, page + 1),
+            request=request,
+        )
+
+    result = fetch_specials(
+        "https://example.test/specials",
+        None,
+        0,
+        0,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sleep=lambda _: None,
+    )
+
+    assert len(result.products) == 75
+    assert len(calls) == 100
+    assert not any("page=51" in url for url in calls)
+
+
+def test_full_recovery_fails_on_unexpected_markup():
+    def handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            text='<span>4 results</span><p>Unexpected response</p>',
+            request=request,
+        )
+
+    with pytest.raises(ValueError, match="no product cards"):
         fetch_specials(
             "https://example.test/specials",
             None,

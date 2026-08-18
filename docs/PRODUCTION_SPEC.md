@@ -45,16 +45,34 @@ separate Worker project. Do not make the B2 bucket public.
 
 ## Pagination and completeness
 
-The scraper follows the source page's server-rendered pagination `rel="next"`
-link. It does not synthesize page URLs and does not request a page after a valid
-terminal page. Product cards must remain recognizable on every requested page;
-unexpected empty or structurally changed HTML fails loudly.
+Myfoodlink exposes at most 50 pages of 48 products from one large sorted query.
+Although page 50 links to page 51, page 51 returns an artificial zero-result
+response. Full production recovery therefore uses the storefront's supported
+alphabetical sorts:
 
-When the source advertises a result count, the scraper records it. An unlimited
-run succeeds only when the number of collected unique products equals that
-advertised count. A changed count during pagination or a short final result
-fails before image synchronization and deployment. Limited local runs may stop
-once their configured limit is reached.
+```text
+Name A-Z (`sort_by=name`)
++
+Name Z-A (`sort_by=name_descending`)
++
+stable product-ID deduplication
++
+exact advertised-count validation
+```
+
+Each direction follows the source's server-rendered `rel="next"` links for no
+more than 50 pages and never requests page 51. If Name A-Z alone reaches the
+advertised count, Name Z-A is not requested. Otherwise both windows are united
+by source product ID, with normalized product URL as the existing fallback.
+Overlapping copies must agree on current identity, URL, name, image, price,
+saving, and offer fields. A count change, conflicting overlap, or union count
+different from the advertised count fails before normalization, image work, or
+deployment.
+
+Limited local runs retain the efficient bounded Top Products path and may stop
+once their configured limit is reached. Retrieval order is never described as
+global Top Products order because that order is not publicly recoverable beyond
+the first 2,400 results.
 
 List requests remain sequential with a random 3–6 second delay. Image requests
 remain sequential with a random 5–8 second delay. Do not add concurrency,
@@ -62,9 +80,11 @@ Playwright, proxy rotation, or browser identity spoofing.
 
 ## Product ordering and grouping
 
-Preserve Tucker Fresh `source_order` within each discount group. Family grouping
-remains conservative and deterministic. Promotion grouping remains a separate
-step:
+After complete recovery, raw products receive a deterministic canonical internal
+order by case-insensitive product name and stable identity. This makes grouping,
+family membership, and image traversal reproducible; it is not display order.
+Family grouping remains conservative and deterministic. Promotion grouping
+remains a separate step:
 
 ```text
 same family + same regular price + same special price + same offer text
@@ -83,9 +103,19 @@ The four mathematical buckets remain, in order:
 
 Classification uses integer-cent regular and special prices, never rounded
 percentages or `saving_cents`. Each group is paginated independently; the next
-group starts on a new page. Confirmed/standalone items precede uncertain items
-inside the same group. Invalid prices use a null calculated discount and the
-documented Group 4 fallback.
+group starts on a new page. Inside each discount group, display items use a
+deterministic random order generated in Python with a local RNG whose seed is
+exactly the advertised special-product count. Each valid/invalid and
+normal/uncertain section is first sorted by stable item ID and then shuffled, so
+input order does not affect output. Normal valid items precede normal
+invalid-price fallback items; all normal items precede uncertain valid and then
+uncertain invalid items. Invalid prices retain a null calculated discount and
+the documented Group 4 fallback.
+
+Two different weekly catalogues with the same product count intentionally reuse
+the same numeric seed. Their permutations may still differ because their input
+item sets differ. Browser refreshes and individual users never randomize the
+catalogue.
 
 ## Production image state
 
@@ -111,9 +141,11 @@ the manifest, reports incomplete progress, exits cleanly, and does not build or
 deploy a replacement catalogue. A manual rerun re-scrapes the current catalogue,
 loads the same production manifest, skips completed images, and continues.
 
-Isolated missing or failed images retain the placeholder behavior. The special
-deployment block applies when the current product set was not fully traversed
-because of the time budget.
+Isolated missing or failed images retain the placeholder behavior after every
+current product has been visited. `image_sync_complete` is the authoritative
+deployment gate. A time-budget stop or the 10-consecutive-failure guard marks
+the traversal incomplete, records the remaining count, persists the manifest,
+and prevents catalogue generation and deployment.
 
 ## Private image proxy
 
@@ -151,7 +183,7 @@ The existing Direct Upload workflow runs Wrangler from `web/` and deploys
 directory therefore remains in the Pages project root.
 
 The weekly schedule remains `17 20 * * 0` and `workflow_dispatch` remains
-available. No push trigger is added. A budget-incomplete run must skip the site
+available. No push trigger is added. Any image-incomplete run must skip the site
 build and Cloudflare deployment, leaving the current site untouched.
 
 ## Required configuration

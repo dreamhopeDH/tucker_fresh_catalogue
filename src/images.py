@@ -177,9 +177,17 @@ def sync_images(
                 store.upload_manifest(manifest)
                 completed_since_upload = 0
             if consecutive_failures >= 10:
-                stats["stopped_after_failures"] = True
-                LOGGER.error("Stopping image requests after 10 consecutive failures")
-                break
+                remaining = len(products) - index
+                if remaining > 0:
+                    stats["image_sync_complete"] = False
+                    stats["stopped_after_failures"] = True
+                    stats["remaining"] = remaining
+                    LOGGER.error(
+                        "Stopping image requests after 10 consecutive failures; "
+                        "%s products remain",
+                        remaining,
+                    )
+                    break
     finally:
         store.upload_manifest(manifest)
         if owned_client:

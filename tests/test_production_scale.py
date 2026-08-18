@@ -1,8 +1,11 @@
 import json
 
+import httpx
+
 from src.catalogue import build_catalogue, write_catalogue_files
 from src.grouping import group_products
 from src.models import Product
+from src.scrape import NAME_ASCENDING_SORT, fetch_specials
 
 
 def product(index: int) -> Product:
@@ -40,6 +43,7 @@ def test_several_thousand_products_group_and_paginate_without_mixed_pages(tmp_pa
         image_manifest={},
         page_size=9,
         source_product_count=len(products),
+        ordering_seed=len(products),
     )
 
     summaries = catalogue["manifest"]["discount_groups"]
@@ -66,3 +70,53 @@ def test_several_thousand_products_group_and_paginate_without_mixed_pages(tmp_pa
     page_files = sorted((tmp_path / "pages").glob("*.json"))
     assert len(page_files) == 448
     assert json.loads((tmp_path / "manifest.json").read_text())["page_count"] == 448
+
+    repeated = build_catalogue(
+        confirmed_offer_groups=[],
+        standalone_products=list(reversed(grouping.standalone_products)),
+        uncertain_products=[],
+        image_manifest={},
+        page_size=9,
+        source_product_count=len(products),
+        ordering_seed=len(products),
+    )
+    first_order = [item["id"] for page in catalogue["pages"] for item in page["items"]]
+    repeated_order = [item["id"] for page in repeated["pages"] for item in page["items"]]
+    assert first_order == repeated_order
+
+
+def test_several_thousand_products_recover_from_bidirectional_windows():
+    def html(ids: range, sort_by: str) -> str:
+        cards = "".join(
+            f'<article data-product-id="p{index}" data-product-name="Product {index:04}" '
+            f'data-product-url="/products/{index}" data-regular-price="$2" '
+            f'data-special-price="$1"></article>'
+            for index in ids
+        )
+        return (
+            cards
+            + '<span>4000 results</span>'
+            + f'<div role="navigation" aria-label="Pagination"><a rel="next" '
+            f'href="/search?page=2&amp;q%5B%5D=special%3A1&amp;sort_by={sort_by}">Next</a></div>'
+        )
+
+    def handler(request: httpx.Request):
+        sort_by = request.url.params["sort_by"]
+        ids = range(0, 2400) if sort_by == NAME_ASCENDING_SORT else range(3999, 1599, -1)
+        return httpx.Response(200, text=html(ids, sort_by), request=request)
+
+    result = fetch_specials(
+        "https://example.test/specials",
+        None,
+        0,
+        0,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sleep=lambda _: None,
+        result_window_pages=1,
+    )
+
+    assert result.name_az_unique_count == 2400
+    assert result.name_za_unique_count == 2400
+    assert result.alphabetical_overlap_count == 800
+    assert result.final_union_unique_count == 4000
+    assert len(result.products) == 4000

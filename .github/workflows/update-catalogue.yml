@@ -71,11 +71,11 @@ jobs:
       - name: Check deployment readiness
         id: readiness
         run: |
-          if jq -e '.stopped_after_budget == true' output/run-summary.json >/dev/null; then
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Image warm-up is incomplete. Progress has been saved to the B2 manifest. Run the workflow again to continue. No new catalogue was deployed."
-          else
+          if jq -e '.image_sync_complete == true' output/run-summary.json >/dev/null; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Image traversal is incomplete. Progress has been saved to the B2 manifest. Run the workflow again to continue. No new catalogue was deployed."
           fi
 
       - name: Build production site
@@ -117,8 +117,15 @@ jobs:
             echo "| Metric | Result |" >> "$GITHUB_STEP_SUMMARY"
             echo "|---|---:|" >> "$GITHUB_STEP_SUMMARY"
             echo "| Mode | $(jq -r 'if .mode == "full" then "Full catalogue" else "Limited catalogue" end' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Retrieval strategy | $(jq -r 'if .retrieval_strategy == "name_az_plus_name_za" then "Name A-Z + Name Z-A" elif .retrieval_strategy == "name_az" then "Name A-Z (Z-A not required)" else .retrieval_strategy end' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Source-advertised products | $(jq -r '.source_advertised_product_count // "unknown"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Name A-Z unique | $(jq -r '.name_az_unique_count // "not applicable"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Name Z-A unique | $(jq -r '.name_za_unique_count // "not required"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Alphabetical overlap | $(jq -r '.alphabetical_overlap_count // "not applicable"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Final union unique | $(jq -r '.final_union_unique_count' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Products scraped | $(jq -r '.actual_product_count' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Ordering | $(jq -r '.ordering_mode' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Ordering seed | $(jq -r '.ordering_seed' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Confirmed families | $(jq -r '.confirmed_family_count' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Standalone products | $(jq -r '.standalone_product_count' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Uncertain products | $(jq -r '.uncertain_product_count' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
@@ -133,10 +140,11 @@ jobs:
             echo "| Images failed | $(jq -r '.failed' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Image sync complete | $(jq -r '.image_sync_complete' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Stopped after budget | $(jq -r '.stopped_after_budget' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Stopped after consecutive failures | $(jq -r '.stopped_after_failures' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Current products remaining | $(jq -r '.remaining' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Final pages | $(jq -r '.page_count // "pending"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
-            if test "$(jq -r '.stopped_after_budget' output/run-summary.json)" = "true"; then
-              echo "> [!IMPORTANT] Image warm-up is incomplete. Progress has been saved to the B2 manifest. Run the workflow again to continue. No new catalogue was deployed." >> "$GITHUB_STEP_SUMMARY"
+            if test "$(jq -r '.image_sync_complete' output/run-summary.json)" != "true"; then
+              echo "> [!IMPORTANT] Image traversal is incomplete. Progress has been saved to the B2 manifest. Run the workflow again to continue. No new catalogue was deployed." >> "$GITHUB_STEP_SUMMARY"
             fi
             if test "$(jq -r '.stopped_after_failures' output/run-summary.json)" = "true"; then
               echo "> [!WARNING] Image requests stopped after 10 consecutive failures." >> "$GITHUB_STEP_SUMMARY"

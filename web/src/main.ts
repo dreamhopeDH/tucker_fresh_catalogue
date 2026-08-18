@@ -43,6 +43,10 @@ type Manifest = {
   page_count: number;
   pages: string[];
   discount_groups: DiscountGroupSummary[];
+  ordering: {
+    mode: "deterministic_random";
+    seed: number;
+  };
 };
 
 const pagesElement = document.querySelector<HTMLDivElement>("#pages")!;

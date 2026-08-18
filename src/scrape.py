@@ -6,7 +6,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -17,18 +17,33 @@ from .normalize import normalize_product_url
 
 LOGGER = logging.getLogger(__name__)
 TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+MYFOODLINK_RESULT_WINDOW_PAGES = 50
+NAME_ASCENDING_SORT = "name"
+NAME_DESCENDING_SORT = "name_descending"
 
 
 @dataclass(frozen=True)
 class ScrapeResult:
     products: list[RawProduct]
     advertised_product_count: int | None
+    retrieval_strategy: str
+    name_az_unique_count: int | None
+    name_za_unique_count: int | None
+    alphabetical_overlap_count: int | None
+    final_union_unique_count: int
 
 
 @dataclass(frozen=True)
 class PaginationMetadata:
     advertised_product_count: int | None
     next_url: str | None
+
+
+@dataclass(frozen=True)
+class _WindowResult:
+    products: dict[str, RawProduct]
+    advertised_product_count: int
+    reached_window_limit: bool
 
 
 def parse_price_cents(value: str | None) -> int | None:
@@ -158,6 +173,276 @@ def parse_pagination_metadata(html: str, page_url: str) -> PaginationMetadata:
     return PaginationMetadata(advertised_count, next_url)
 
 
+def _product_identity(product: RawProduct) -> str:
+    if product.source_product_id:
+        return f"id:{product.source_product_id}"
+    return f"url:{normalize_product_url(product.product_url)}"
+
+
+def _material_product_fields(product: RawProduct) -> tuple:
+    return (
+        product.source_product_id,
+        normalize_product_url(product.product_url),
+        product.name,
+        product.image_url,
+        product.regular_price_cents,
+        product.special_price_cents,
+        product.saving_cents,
+        product.offer_text,
+    )
+
+
+def _alphabetical_url(source_url: str, sort_by: str) -> str:
+    parts = urlsplit(source_url)
+    return urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            "/search",
+            urlencode([("q[]", "special:1"), ("sort_by", sort_by)]),
+            "",
+        )
+    )
+
+
+def _get_page(
+    client: httpx.Client,
+    page_url: str,
+    delay_min_seconds: float,
+    delay_max_seconds: float,
+    sleep,
+) -> httpx.Response:
+    response = None
+    last_transport_error: httpx.TransportError | None = None
+    for attempt in range(3):
+        try:
+            response = client.get(page_url)
+        except httpx.TransportError as error:
+            last_transport_error = error
+            sleep(random.uniform(delay_min_seconds, delay_max_seconds))
+            if attempt == 2:
+                raise
+            continue
+        sleep(random.uniform(delay_min_seconds, delay_max_seconds))
+        if response.status_code not in TRANSIENT_STATUS:
+            break
+        if attempt == 2:
+            response.raise_for_status()
+    if response is None:
+        if last_transport_error:
+            raise last_transport_error
+        raise RuntimeError("List page request did not return a response")
+    response.raise_for_status()
+    return response
+
+
+def _validate_advertised_count(
+    expected: int | None,
+    observed: int | None,
+    *,
+    sort_label: str,
+    page: int,
+) -> int | None:
+    if observed is None:
+        return expected
+    if expected is not None and observed != expected:
+        raise RuntimeError(
+            "Source result count changed during alphabetical recovery: "
+            f"expected {expected}, {sort_label} page {page} advertised {observed}. "
+            "Rerun to avoid merging different catalogue states."
+        )
+    return observed
+
+
+def _scrape_alphabetical_window(
+    *,
+    source_url: str,
+    sort_by: str,
+    sort_label: str,
+    expected_count: int | None,
+    result_window_pages: int,
+    client: httpx.Client,
+    delay_min_seconds: float,
+    delay_max_seconds: float,
+    sleep,
+) -> _WindowResult:
+    page_url = _alphabetical_url(source_url, sort_by)
+    products: dict[str, RawProduct] = {}
+    visited_urls: set[str] = set()
+    advertised_count = expected_count
+
+    for page in range(1, result_window_pages + 1):
+        if page_url in visited_urls:
+            raise RuntimeError(f"{sort_label} pagination looped to a previously requested URL")
+        visited_urls.add(page_url)
+        response = _get_page(
+            client, page_url, delay_min_seconds, delay_max_seconds, sleep
+        )
+        pagination = parse_pagination_metadata(response.text, str(response.url))
+        advertised_count = _validate_advertised_count(
+            advertised_count,
+            pagination.advertised_product_count,
+            sort_label=sort_label,
+            page=page,
+        )
+        if advertised_count is None:
+            raise RuntimeError(
+                f"{sort_label} did not advertise a result count; full recovery cannot "
+                "be validated safely"
+            )
+
+        page_products = parse_specials_page(response.text, str(response.url))
+        added = 0
+        for product in page_products:
+            identity = _product_identity(product)
+            existing = products.get(identity)
+            if existing is not None:
+                if _material_product_fields(existing) != _material_product_fields(product):
+                    raise RuntimeError(
+                        f"{sort_label} returned conflicting copies of product {identity}"
+                    )
+                continue
+            products[identity] = product
+            added += 1
+        LOGGER.info(
+            "%s page %s: %s parsed, %s unique, %s cumulative",
+            sort_label,
+            page,
+            len(page_products),
+            added,
+            len(products),
+        )
+
+        if len(products) == advertised_count:
+            return _WindowResult(products, advertised_count, False)
+        if pagination.next_url is None:
+            raise RuntimeError(
+                f"{sort_label} ended after {len(products)} unique products but the source "
+                f"advertised {advertised_count}"
+            )
+        if page == result_window_pages:
+            return _WindowResult(products, advertised_count, True)
+        page_url = pagination.next_url
+
+    raise AssertionError("Alphabetical result-window loop exited unexpectedly")
+
+
+def _merge_alphabetical_windows(
+    name_az: _WindowResult, name_za: _WindowResult
+) -> tuple[list[RawProduct], int]:
+    merged = dict(name_az.products)
+    overlap = 0
+    for identity, product in name_za.products.items():
+        existing = merged.get(identity)
+        if existing is None:
+            merged[identity] = product
+            continue
+        overlap += 1
+        if _material_product_fields(existing) != _material_product_fields(product):
+            raise RuntimeError(
+                "Alphabetical recovery found materially conflicting copies of "
+                f"product {identity}; rerun to avoid merging different catalogue states"
+            )
+
+    if len(merged) != name_az.advertised_product_count:
+        LOGGER.error(
+            "Alphabetical recovery incomplete: advertised=%s A-Z=%s Z-A=%s "
+            "overlap=%s union=%s",
+            name_az.advertised_product_count,
+            len(name_az.products),
+            len(name_za.products),
+            overlap,
+            len(merged),
+        )
+        raise RuntimeError(
+            "Alphabetical recovery was incomplete: source advertised "
+            f"{name_az.advertised_product_count}, A-Z collected {len(name_az.products)}, "
+            f"Z-A collected {len(name_za.products)}, overlap was {overlap}, and the "
+            f"union contained {len(merged)} unique products. No incomplete catalogue "
+            "will be deployed."
+        )
+
+    canonical = sorted(
+        merged.items(), key=lambda entry: (entry[1].name.casefold(), entry[0])
+    )
+    products = [product for _, product in canonical]
+    for source_order, product in enumerate(products):
+        product.source_order = source_order
+    return products, overlap
+
+
+def _fetch_full_specials(
+    *,
+    source_url: str,
+    result_window_pages: int,
+    client: httpx.Client,
+    delay_min_seconds: float,
+    delay_max_seconds: float,
+    sleep,
+) -> ScrapeResult:
+    name_az = _scrape_alphabetical_window(
+        source_url=source_url,
+        sort_by=NAME_ASCENDING_SORT,
+        sort_label="Name A-Z",
+        expected_count=None,
+        result_window_pages=result_window_pages,
+        client=client,
+        delay_min_seconds=delay_min_seconds,
+        delay_max_seconds=delay_max_seconds,
+        sleep=sleep,
+    )
+    if len(name_az.products) == name_az.advertised_product_count:
+        canonical = sorted(
+            name_az.products.items(),
+            key=lambda entry: (entry[1].name.casefold(), entry[0]),
+        )
+        products = [product for _, product in canonical]
+        for source_order, product in enumerate(products):
+            product.source_order = source_order
+        LOGGER.info("Name Z-A was not required; Name A-Z recovered the full catalogue")
+        return ScrapeResult(
+            products,
+            name_az.advertised_product_count,
+            "name_az",
+            len(name_az.products),
+            None,
+            0,
+            len(products),
+        )
+    if not name_az.reached_window_limit:
+        raise RuntimeError("Name A-Z recovery ended incompletely before the result window")
+
+    name_za = _scrape_alphabetical_window(
+        source_url=source_url,
+        sort_by=NAME_DESCENDING_SORT,
+        sort_label="Name Z-A",
+        expected_count=name_az.advertised_product_count,
+        result_window_pages=result_window_pages,
+        client=client,
+        delay_min_seconds=delay_min_seconds,
+        delay_max_seconds=delay_max_seconds,
+        sleep=sleep,
+    )
+    products, overlap = _merge_alphabetical_windows(name_az, name_za)
+    LOGGER.info(
+        "Alphabetical recovery complete: advertised=%s A-Z=%s Z-A=%s overlap=%s union=%s",
+        name_az.advertised_product_count,
+        len(name_az.products),
+        len(name_za.products),
+        overlap,
+        len(products),
+    )
+    return ScrapeResult(
+        products,
+        name_az.advertised_product_count,
+        "name_az_plus_name_za",
+        len(name_az.products),
+        len(name_za.products),
+        overlap,
+        len(products),
+    )
+
+
 def fetch_specials(
     source_url: str,
     max_products: int | None = 100,
@@ -165,13 +450,30 @@ def fetch_specials(
     delay_max_seconds: float = 6,
     client: httpx.Client | None = None,
     sleep=time.sleep,
+    result_window_pages: int = MYFOODLINK_RESULT_WINDOW_PAGES,
 ) -> ScrapeResult:
+    if result_window_pages <= 0:
+        raise ValueError("result_window_pages must be positive")
     owned_client = client is None
     client = client or httpx.Client(
         headers={"User-Agent": "PersonalTuckerCatalogue/0.1"},
         follow_redirects=True,
         timeout=30,
     )
+    if max_products is None:
+        try:
+            return _fetch_full_specials(
+                source_url=source_url,
+                result_window_pages=result_window_pages,
+                client=client,
+                delay_min_seconds=delay_min_seconds,
+                delay_max_seconds=delay_max_seconds,
+                sleep=sleep,
+            )
+        finally:
+            if owned_client:
+                client.close()
+
     products: list[RawProduct] = []
     seen: set[str] = set()
     page = 1
@@ -179,31 +481,17 @@ def fetch_specials(
     advertised_product_count: int | None = None
     visited_urls: set[str] = set()
     try:
-        while max_products is None or len(products) < max_products:
+        while len(products) < max_products:
             if page_url in visited_urls:
                 raise RuntimeError("Specials pagination looped to a previously requested URL")
             visited_urls.add(page_url)
-            response = None
-            last_transport_error: httpx.TransportError | None = None
-            for attempt in range(3):
-                try:
-                    response = client.get(page_url)
-                except httpx.TransportError as error:
-                    last_transport_error = error
-                    sleep(random.uniform(delay_min_seconds, delay_max_seconds))
-                    if attempt == 2:
-                        raise
-                    continue
-                sleep(random.uniform(delay_min_seconds, delay_max_seconds))
-                if response.status_code not in TRANSIENT_STATUS:
-                    break
-                if attempt == 2:
-                    response.raise_for_status()
-            if response is None:
-                if last_transport_error:
-                    raise last_transport_error
-                raise RuntimeError("List page request did not return a response")
-            response.raise_for_status()
+            response = _get_page(
+                client,
+                page_url,
+                delay_min_seconds,
+                delay_max_seconds,
+                sleep,
+            )
             pagination = parse_pagination_metadata(response.text, str(response.url))
             if pagination.advertised_product_count is not None:
                 if advertised_product_count is None:
@@ -224,7 +512,7 @@ def fetch_specials(
                 raw.source_order = len(products)
                 products.append(raw)
                 added += 1
-                if max_products is not None and len(products) >= max_products:
+                if len(products) >= max_products:
                     break
             LOGGER.info(
                 "Page %s: %s parsed, %s unique, %s cumulative",
@@ -233,7 +521,7 @@ def fetch_specials(
                 added,
                 len(products),
             )
-            if max_products is not None and len(products) >= max_products:
+            if len(products) >= max_products:
                 break
             if added == 0:
                 raise RuntimeError(
@@ -242,11 +530,7 @@ def fetch_specials(
             if pagination.next_url is None:
                 expected_for_run = None
                 if advertised_product_count is not None:
-                    expected_for_run = (
-                        advertised_product_count
-                        if max_products is None
-                        else min(max_products, advertised_product_count)
-                    )
+                    expected_for_run = min(max_products, advertised_product_count)
                 if expected_for_run is not None and len(products) != expected_for_run:
                     raise RuntimeError(
                         "Specials scrape was incomplete: source advertised "
@@ -264,4 +548,12 @@ def fetch_specials(
         raise RuntimeError("Scrape produced no products; refusing to build an empty catalogue")
     LOGGER.info("Expected source products: %s", advertised_product_count or "unknown")
     LOGGER.info("Actual unique products: %s", len(products))
-    return ScrapeResult(products, advertised_product_count)
+    return ScrapeResult(
+        products,
+        advertised_product_count,
+        "limited_top_products",
+        None,
+        None,
+        None,
+        len(products),
+    )

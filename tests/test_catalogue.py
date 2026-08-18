@@ -42,6 +42,7 @@ def catalogue_for(
     uncertain: list[UncertainProduct] | None = None,
     page_size: int = 9,
     image_manifest: dict | None = None,
+    ordering_seed: int | None = None,
 ) -> dict:
     groups = groups or []
     standalone = standalone or []
@@ -54,6 +55,7 @@ def catalogue_for(
         image_manifest=image_manifest or {},
         page_size=page_size,
         source_product_count=source_count,
+        ordering_seed=source_count if ordering_seed is None else ordering_seed,
     )
 
 
@@ -80,20 +82,35 @@ def test_discount_bucket_rejects_invalid_prices(regular, special):
     assert discount_bucket(regular, special) is None
 
 
-def test_original_source_order_is_preserved_inside_bucket():
-    catalogue = catalogue_for(
-        standalone=[
-            product("later-larger-discount", 9, 100, 20),
-            product("first-smaller-discount", 4, 100, 49),
-            product("last", 16, 100, 30),
-        ]
-    )
-
-    assert [item["id"] for item in catalogue["pages"][0]["items"]] == [
-        "first-smaller-discount",
-        "later-larger-discount",
-        "last",
+def item_ids(catalogue: dict, group_id: str | None = None) -> list[str]:
+    return [
+        item["id"]
+        for page in catalogue["pages"]
+        if group_id is None or page["discount_group"] == group_id
+        for item in page["items"]
     ]
+
+
+def test_deterministic_random_order_repeats_for_same_seed():
+    products = [product(f"item-{index:02}", index, 100, 49) for index in range(20)]
+
+    first = catalogue_for(standalone=products, ordering_seed=3754)
+    second = catalogue_for(standalone=list(reversed(products)), ordering_seed=3754)
+
+    assert item_ids(first) == item_ids(second)
+    assert first["manifest"]["ordering"] == {
+        "mode": "deterministic_random",
+        "seed": 3754,
+    }
+
+
+def test_different_ordering_seed_changes_a_representative_group():
+    products = [product(f"item-{index:02}", index, 100, 49) for index in range(30)]
+
+    first = catalogue_for(standalone=products, ordering_seed=3754)
+    second = catalogue_for(standalone=products, ordering_seed=3755)
+
+    assert item_ids(first) != item_ids(second)
 
 
 def test_each_discount_group_is_paginated_independently():
@@ -146,6 +163,31 @@ def test_uncertain_products_enter_their_bucket_after_normal_items():
         "uncertain-under",
     ]
     assert "uncertain_start_page" not in catalogue["manifest"]
+
+
+def test_randomization_preserves_normal_invalid_uncertain_boundaries():
+    normal_valid = [product(f"normal-valid-{index}", index, 100, 70) for index in range(5)]
+    normal_invalid = [product(f"normal-invalid-{index}", 10 + index, None, 70) for index in range(3)]
+    uncertain_valid = [
+        UncertainProduct(product(f"uncertain-valid-{index}", 20 + index, 100, 70), "x", 90)
+        for index in range(4)
+    ]
+    uncertain_invalid = [
+        UncertainProduct(product(f"uncertain-invalid-{index}", 30 + index, None, 70), "x", 90)
+        for index in range(2)
+    ]
+
+    catalogue = catalogue_for(
+        standalone=normal_invalid + normal_valid,
+        uncertain=uncertain_invalid + uncertain_valid,
+        ordering_seed=3754,
+    )
+    ids = item_ids(catalogue, "under_40")
+
+    assert all(item.startswith("normal-valid-") for item in ids[:5])
+    assert all(item.startswith("normal-invalid-") for item in ids[5:8])
+    assert all(item.startswith("uncertain-valid-") for item in ids[8:12])
+    assert all(item.startswith("uncertain-invalid-") for item in ids[12:])
 
 
 def test_different_promotions_in_one_family_become_separate_display_items():

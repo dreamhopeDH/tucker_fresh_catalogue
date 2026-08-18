@@ -83,6 +83,7 @@ def test_sync_resumes_skips_missing_and_downloads_sequentially(tmp_path):
         output_directory=tmp_path,
         image_delay_min_seconds=0,
         image_delay_max_seconds=0,
+        b2_prefix="test",
     )
     products = [
         make_product("same", "https://e/same.png", 0),
@@ -121,6 +122,7 @@ def test_sync_handles_one_hundred_images_without_concurrency(tmp_path):
     assert stats["downloaded"] == 100
     assert len(store.images) == 100
     assert store.manifest_uploads == 21
+    assert stats["image_sync_complete"] is True
 
 
 def test_404_is_missing_without_retry_and_429_honors_retry_after(tmp_path):
@@ -214,3 +216,68 @@ def test_image_sync_budget_saves_progress_and_next_run_resumes(tmp_path):
     assert second_stats["image_sync_complete"] is True
     assert second_stats["stopped_after_budget"] is False
     assert second_stats["remaining"] == 0
+
+
+def test_ten_consecutive_failures_mark_early_traversal_incomplete(tmp_path):
+    settings = replace(
+        Settings.from_env(),
+        output_directory=tmp_path,
+        image_delay_min_seconds=0,
+        image_delay_max_seconds=0,
+        image_max_attempts=1,
+    )
+    products = [
+        make_product(f"p{index}", f"https://e/{index}.png", index)
+        for index in range(11)
+    ]
+    store = FakeStore()
+    store.manifest = {}
+    client = SequenceClient([(500, {}) for _ in range(10)])
+
+    _, stats = sync_images(
+        products,
+        store,
+        settings,
+        client=client,
+        sleep=lambda _: None,
+    )
+
+    assert client.requests == 10
+    assert stats["failed"] == 10
+    assert stats["image_sync_complete"] is False
+    assert stats["stopped_after_failures"] is True
+    assert stats["remaining"] == 1
+    assert store.manifest_uploads >= 1
+
+
+def test_full_traversal_with_isolated_image_failures_remains_complete(tmp_path):
+    settings = replace(
+        Settings.from_env(),
+        output_directory=tmp_path,
+        image_delay_min_seconds=0,
+        image_delay_max_seconds=0,
+        image_max_attempts=1,
+    )
+    products = [
+        make_product(f"p{index}", f"https://e/{index}.png", index)
+        for index in range(3)
+    ]
+    store = FakeStore()
+    store.manifest = {}
+    client = SequenceClient([(500, {}), (200, {}), (404, {})])
+
+    _, stats = sync_images(
+        products,
+        store,
+        settings,
+        client=client,
+        sleep=lambda _: None,
+    )
+
+    assert client.requests == 3
+    assert stats["failed"] == 1
+    assert stats["missing"] == 1
+    assert stats["downloaded"] == 1
+    assert stats["image_sync_complete"] is True
+    assert stats["stopped_after_failures"] is False
+    assert stats["remaining"] == 0

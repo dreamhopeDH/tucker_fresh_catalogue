@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -119,6 +120,7 @@ def build_catalogue(
     image_manifest: dict,
     page_size: int,
     source_product_count: int,
+    ordering_seed: int | None = None,
 ) -> dict:
     if page_size <= 0:
         raise ValueError("page_size must be greater than zero")
@@ -146,24 +148,28 @@ def build_catalogue(
         bucket, invalid, classified_item = _with_discount(item)
         grouped[bucket]["uncertain"].append((invalid, classified_item))
 
+    seed = source_product_count if ordering_seed is None else ordering_seed
+    rng = random.Random(seed)
+
+    def shuffled(entries: list[tuple[bool, dict]], invalid: bool) -> list[dict]:
+        items = sorted(
+            (item for is_invalid, item in entries if is_invalid is invalid),
+            key=lambda item: item["id"],
+        )
+        rng.shuffle(items)
+        return items
+
     pages: list[dict] = []
     discount_group_summaries: list[dict] = []
     display_item_count = 0
     for group_id, label in DISCOUNT_GROUPS:
         sections = grouped[group_id]
-        normal = [
-            item
-            for _, item in sorted(
-                sections["normal"], key=lambda entry: (entry[0], entry[1]["source_order"])
-            )
+        items = [
+            *shuffled(sections["normal"], False),
+            *shuffled(sections["normal"], True),
+            *shuffled(sections["uncertain"], False),
+            *shuffled(sections["uncertain"], True),
         ]
-        uncertain = [
-            item
-            for _, item in sorted(
-                sections["uncertain"], key=lambda entry: (entry[0], entry[1]["source_order"])
-            )
-        ]
-        items = normal + uncertain
         item_count = len(items)
         page_count = (item_count + page_size - 1) // page_size
         start_page = len(pages) + 1 if page_count else None
@@ -195,6 +201,10 @@ def build_catalogue(
             "page_size": page_size,
             "page_count": len(pages),
             "discount_groups": discount_group_summaries,
+            "ordering": {
+                "mode": "deterministic_random",
+                "seed": seed,
+            },
             "pages": [f"data/pages/{index}.json" for index in range(1, len(pages) + 1)],
         },
         "pages": pages,
