@@ -113,6 +113,31 @@ def _product_item(product: Product, image_manifest: dict, item_type: str = "prod
     }
 
 
+def _search_entry(item: dict, page: int) -> dict:
+    product_labels = [
+        " ".join(
+            part
+            for part in (product["name"], product["variant"], product["size"])
+            if part
+        )
+        for product in item["products"]
+    ]
+    details = list(
+        dict.fromkeys(
+            label
+            for label in product_labels
+            if label.casefold() != item["name"].casefold()
+        )
+    )
+    return {
+        "id": item["id"],
+        "name": item["name"],
+        "details": details,
+        "search_text": " ".join([item["name"], *product_labels]),
+        "page": page,
+    }
+
+
 def build_catalogue(
     confirmed_offer_groups: list[PromotionGroup],
     standalone_products: list[Product],
@@ -205,9 +230,20 @@ def build_catalogue(
                 "mode": "deterministic_random",
                 "seed": seed,
             },
+            "search_index": "data/search-index.json",
             "pages": [f"data/pages/{index}.json" for index in range(1, len(pages) + 1)],
         },
         "pages": pages,
+        "search_index": {
+            "items": sorted(
+                (
+                    _search_entry(item, page["page"])
+                    for page in pages
+                    for item in page["items"]
+                ),
+                key=lambda entry: (entry["name"].casefold(), entry["id"]),
+            )
+        },
     }
 
 
@@ -218,6 +254,10 @@ def write_catalogue_files(catalogue: dict, output_directory: Path) -> None:
     pages_directory.mkdir(parents=True, exist_ok=True)
     (output_directory / "manifest.json").write_text(
         json.dumps(catalogue["manifest"], indent=2), encoding="utf-8"
+    )
+    (output_directory / "search-index.json").write_text(
+        json.dumps(catalogue["search_index"], separators=(",", ":")),
+        encoding="utf-8",
     )
     for page in catalogue["pages"]:
         (pages_directory / f"{page['page']}.json").write_text(

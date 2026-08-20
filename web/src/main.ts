@@ -42,12 +42,21 @@ type Manifest = {
   generated_at: string;
   page_count: number;
   pages: string[];
+  search_index: string;
   discount_groups: DiscountGroupSummary[];
   ordering: {
     mode: "deterministic_random";
     seed: number;
   };
 };
+type SearchEntry = {
+  id: string;
+  name: string;
+  details: string[];
+  search_text: string;
+  page: number;
+};
+type SearchIndex = { items: SearchEntry[] };
 
 const pagesElement = document.querySelector<HTMLDivElement>("#pages")!;
 const statusElement = document.querySelector<HTMLParagraphElement>("#status")!;
@@ -61,10 +70,20 @@ const productDialog = document.querySelector<HTMLDialogElement>("#product-dialog
 const productDialogClose = document.querySelector<HTMLButtonElement>("#product-dialog-close")!;
 const productDialogTitle = document.querySelector<HTMLHeadingElement>("#product-dialog-title")!;
 const productDialogContent = document.querySelector<HTMLDivElement>("#product-dialog-content")!;
+const searchOpen = document.querySelector<HTMLButtonElement>("#search-open")!;
+const searchDialog = document.querySelector<HTMLDialogElement>("#search-dialog")!;
+const searchClose = document.querySelector<HTMLButtonElement>("#search-close")!;
+const searchInput = document.querySelector<HTMLInputElement>("#search-input")!;
+const searchSummary = document.querySelector<HTMLParagraphElement>("#search-summary")!;
+const searchResults = document.querySelector<HTMLDivElement>("#search-results")!;
 const placeholderUrl = "./placeholder.svg";
 const loaded = new Set<number>();
 const loading = new Set<number>();
+const pageData = new Map<number, PageData>();
+const pageRequests = new Map<number, Promise<PageData>>();
 let manifest: Manifest;
+let searchIndex: SearchIndex | null = null;
+let searchIndexRequest: Promise<SearchIndex> | null = null;
 let currentPage = 1;
 let scrollTimer = 0;
 let dialogCloseTimer = 0;
@@ -252,14 +271,32 @@ function renderCard(item: CatalogueItem): HTMLElement {
   return card;
 }
 
+async function getPageData(index: number): Promise<PageData> {
+  const cached = pageData.get(index);
+  if (cached) return cached;
+  const pending = pageRequests.get(index);
+  if (pending) return pending;
+  const request = (async () => {
+    const response = await fetch(manifest.pages[index - 1]);
+    if (!response.ok) throw new Error(`page ${index} returned ${response.status}`);
+    const data = (await response.json()) as PageData;
+    pageData.set(index, data);
+    return data;
+  })();
+  pageRequests.set(index, request);
+  try {
+    return await request;
+  } finally {
+    pageRequests.delete(index);
+  }
+}
+
 async function loadPage(index: number): Promise<void> {
   if (index < 1 || index > manifest.page_count || loaded.has(index) || loading.has(index)) return;
   loading.add(index);
   const shell = document.querySelector<HTMLElement>(`[data-page="${index}"]`)!;
   try {
-    const response = await fetch(manifest.pages[index - 1]);
-    if (!response.ok) throw new Error(`page ${index} returned ${response.status}`);
-    const data = (await response.json()) as PageData;
+    const data = await getPageData(index);
     const grid = document.createElement("div");
     grid.className = "product-grid";
     data.items.forEach((item) => grid.append(renderCard(item)));
@@ -279,6 +316,7 @@ function unloadDistantPages(): void {
       const shell = document.querySelector<HTMLElement>(`[data-page="${page}"]`);
       shell?.replaceChildren();
       loaded.delete(page);
+      pageData.delete(page);
     }
   });
 }
@@ -310,12 +348,97 @@ function goToPage(page: number, behavior: ScrollBehavior = "smooth"): void {
   document.querySelector<HTMLElement>(`[data-page="${target}"]`)?.scrollIntoView({ behavior, inline: "start" });
 }
 
+async function loadSearchIndex(): Promise<SearchIndex> {
+  if (searchIndex) return searchIndex;
+  if (searchIndexRequest) return searchIndexRequest;
+  searchIndexRequest = (async () => {
+    const response = await fetch(manifest.search_index);
+    if (!response.ok) throw new Error(`Search index returned ${response.status}`);
+    return (await response.json()) as SearchIndex;
+  })();
+  try {
+    searchIndex = await searchIndexRequest;
+    return searchIndex;
+  } finally {
+    searchIndexRequest = null;
+  }
+}
+
+function closeSearch(): void {
+  if (searchDialog.open) searchDialog.close();
+}
+
+async function selectSearchResult(entry: SearchEntry, opener: HTMLButtonElement): Promise<void> {
+  opener.disabled = true;
+  searchSummary.textContent = "Loading product…";
+  try {
+    const data = await getPageData(entry.page);
+    const item = data.items.find((candidate) => candidate.id === entry.id);
+    if (!item) throw new Error("Product is no longer on this catalogue page");
+    closeSearch();
+    currentPage = entry.page;
+    goToPage(entry.page, "auto");
+    updateControls();
+    openProductDialog(item, searchOpen);
+  } catch (error) {
+    opener.disabled = false;
+    searchSummary.textContent = error instanceof Error ? error.message : "Product could not be loaded";
+  }
+}
+
+function renderSearchResults(): void {
+  const query = searchInput.value.trim().toLocaleLowerCase();
+  searchResults.replaceChildren();
+  if (!query) {
+    searchSummary.textContent = "Type a product name to search.";
+    return;
+  }
+  if (!searchIndex) return;
+  const terms = query.split(/\s+/).filter(Boolean);
+  const matches = searchIndex.items.filter((entry) => {
+    const searchable = entry.search_text.toLocaleLowerCase();
+    return terms.every((term) => searchable.includes(term));
+  });
+  const visible = matches.slice(0, 50);
+  searchSummary.textContent = matches.length
+    ? `${matches.length} result${matches.length === 1 ? "" : "s"}${matches.length > visible.length ? "; showing first 50" : ""}.`
+    : "No matching specials.";
+  visible.forEach((entry) => {
+    const button = document.createElement("button");
+    button.className = "search-result";
+    button.type = "button";
+    const name = document.createElement("strong");
+    name.textContent = entry.name;
+    button.append(name);
+    if (entry.details.length) {
+      const details = document.createElement("span");
+      details.textContent = entry.details.join(" · ");
+      button.append(details);
+    }
+    button.addEventListener("click", () => void selectSearchResult(entry, button));
+    searchResults.append(button);
+  });
+}
+
+async function openSearch(): Promise<void> {
+  searchDialog.showModal();
+  searchInput.focus();
+  searchSummary.textContent = "Loading search…";
+  try {
+    await loadSearchIndex();
+    renderSearchResults();
+  } catch (error) {
+    searchSummary.textContent = error instanceof Error ? error.message : "Search is unavailable";
+  }
+}
+
 async function start(): Promise<void> {
   try {
     const response = await fetch("./data/manifest.json");
     if (!response.ok) throw new Error(`Catalogue manifest returned ${response.status}`);
     manifest = (await response.json()) as Manifest;
     if (!manifest.page_count) throw new Error("Catalogue contains no pages");
+    searchOpen.disabled = false;
     statusElement.textContent = `Updated ${new Date(manifest.generated_at).toLocaleDateString()}`;
     for (let page = 1; page <= manifest.page_count; page += 1) {
       const shell = document.createElement("section");
@@ -356,6 +479,12 @@ previousButton.addEventListener("click", () => goToPage(currentPage - 1));
 nextButton.addEventListener("click", () => goToPage(currentPage + 1));
 firstButton.addEventListener("click", () => goToPage(1));
 pageSelect.addEventListener("change", () => goToPage(Number(pageSelect.value)));
+searchOpen.addEventListener("click", () => void openSearch());
+searchClose.addEventListener("click", closeSearch);
+searchInput.addEventListener("input", renderSearchResults);
+searchDialog.addEventListener("click", (event) => {
+  if (event.target === searchDialog) closeSearch();
+});
 productDialogClose.addEventListener("click", closeProductDialog);
 productDialog.addEventListener("cancel", (event) => {
   event.preventDefault();

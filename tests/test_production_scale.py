@@ -52,6 +52,7 @@ def test_several_thousand_products_group_and_paginate_without_mixed_pages(tmp_pa
     assert catalogue["manifest"]["page_size"] == 9
     assert catalogue["manifest"]["page_count"] == 448
     assert all(len(page["items"]) <= 9 for page in catalogue["pages"])
+    assert len(catalogue["search_index"]["items"]) == 4_000
     assert all(
         page["discount_group"]
         == next(
@@ -70,6 +71,7 @@ def test_several_thousand_products_group_and_paginate_without_mixed_pages(tmp_pa
     page_files = sorted((tmp_path / "pages").glob("*.json"))
     assert len(page_files) == 448
     assert json.loads((tmp_path / "manifest.json").read_text())["page_count"] == 448
+    assert len(json.loads((tmp_path / "search-index.json").read_text())["items"]) == 4_000
 
     repeated = build_catalogue(
         confirmed_offer_groups=[],
@@ -83,6 +85,7 @@ def test_several_thousand_products_group_and_paginate_without_mixed_pages(tmp_pa
     first_order = [item["id"] for page in catalogue["pages"] for item in page["items"]]
     repeated_order = [item["id"] for page in repeated["pages"] for item in page["items"]]
     assert first_order == repeated_order
+    assert catalogue["search_index"] == repeated["search_index"]
 
 
 def test_several_thousand_products_recover_from_bidirectional_windows():

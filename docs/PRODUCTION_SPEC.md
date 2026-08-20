@@ -32,8 +32,8 @@ Tucker Fresh image
 ```
 
 Do not add a database, backend API, server framework, frontend framework,
-search, accounts, categories, admin UI, queue, PWA, Service Worker, VPS, or a
-separate Worker project. Do not make the B2 bucket public.
+accounts, categories, admin UI, queue, PWA, Service Worker, VPS, or a separate
+Worker project. Do not make the B2 bucket public.
 
 ## Production and local limits
 
@@ -177,6 +177,12 @@ distant-page unloading, product detail dialog, fallback image, and active
 discount-group label. The frontend creates lightweight page shells but loads
 only current and adjacent page JSON. It must not eagerly render thousands of
 cards.
+
+Catalogue search remains static and framework-free. Generation writes one
+lightweight `data/search-index.json` containing display-item names, variant
+terms, IDs, and page numbers. The browser fetches it only when search is opened.
+Selecting a result loads only its existing page JSON and reuses the existing
+product-detail dialog; it does not eagerly fetch every catalogue page.
 
 The existing Direct Upload workflow runs Wrangler from `web/` and deploys
 `../output/site` to the existing `CLOUDFLARE_PAGES_PROJECT`. The `functions/`

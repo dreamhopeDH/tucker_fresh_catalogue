@@ -17,8 +17,9 @@ The active architecture and acceptance criteria are in
 `docs/TEST_MVP_SPEC.md` is historical only.
 
 The project intentionally has no database, API server, admin dashboard, PWA,
-Service Worker, search, accounts, categories, frontend framework, external
-queue, or automatic B2 garbage collection.
+Service Worker, accounts, categories, frontend framework, external queue, or
+automatic B2 garbage collection. Catalogue search uses one generated static
+index and adds no server-side component.
 
 ## Local fixture build
 
@@ -239,7 +240,9 @@ The frontend remains a yellow mobile-first 3×3 catalogue with horizontal swipe,
 previous/next buttons, page selector, current-page restoration, active discount
 group label, nearby JSON lazy loading, distant DOM unloading, product-detail
 dialog, and placeholder fallback. It does not fetch all page JSON or render all
-product cards at startup.
+product cards at startup. The lightweight `data/search-index.json` is fetched
+only when the user opens search; choosing a result loads that item's existing
+page and opens the existing product-detail dialog.
 
 The four exact discount boundaries remain:
 

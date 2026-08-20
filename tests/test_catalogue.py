@@ -250,8 +250,42 @@ def test_manifest_keeps_all_group_metadata_and_image_keys(tmp_path: Path):
         "page_count": 1,
     }
     assert catalogue["pages"][0]["items"][0]["products"][0]["image_key"] == object_key
+    assert catalogue["manifest"]["search_index"] == "data/search-index.json"
     assert "https://" not in str(catalogue)
 
     write_catalogue_files(catalogue, tmp_path)
     page_json = (tmp_path / "pages" / "1.json").read_text(encoding="utf-8")
     assert '"discount_group": "exactly_50"' in page_json
+    assert (tmp_path / "search-index.json").exists()
+
+
+def test_search_index_is_lightweight_searchable_and_points_to_catalogue_pages():
+    original = product(
+        "original",
+        0,
+        family_stem="brand chips",
+        variant="Sea Salt",
+    )
+    barbecue = product(
+        "barbecue",
+        1,
+        family_stem="brand chips",
+        variant="Smoky BBQ",
+    )
+    catalogue = catalogue_for(
+        groups=[PromotionGroup("chips", "brand chips", [original, barbecue])],
+        standalone=[product("coffee", 2, 100, 70)],
+    )
+
+    entries = catalogue["search_index"]["items"]
+    family = next(entry for entry in entries if entry["id"].startswith("chips--"))
+    coffee = next(entry for entry in entries if entry["id"] == "coffee")
+
+    assert family["name"] == "Brand Chips"
+    assert family["page"] == 1
+    assert "Sea Salt" in family["search_text"]
+    assert "Smoky BBQ" in family["search_text"]
+    assert family["details"]
+    assert coffee["page"] == 2
+    assert "products" not in family
+    assert "offers" not in family
