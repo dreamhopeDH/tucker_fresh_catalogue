@@ -112,6 +112,14 @@ invalid-price fallback items; all normal items precede uncertain valid and then
 uncertain invalid items. Invalid prices retain a null calculated discount and
 the documented Group 4 fallback.
 
+Source price units are preserved. Approximate-each prices use the compact card
+label `EACH APX`; the full source wording remains available to assistive
+technology. Only genuine Saving stickers populate `saving_cents`, while deal
+stickers such as `3 for $3` remain offer text. If an approximate price's regular,
+special, and saving values are arithmetically incompatible, catalogue output
+keeps the special price and unit but suppresses misleading was/saving values,
+sets the calculated discount to null, and uses the existing Group 4 fallback.
+
 Two different weekly catalogues with the same product count intentionally reuse
 the same numeric seed. Their permutations may still differ because their input
 item sets differ. Browser refreshes and individual users never randomize the

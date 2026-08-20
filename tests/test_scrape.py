@@ -91,6 +91,50 @@ def test_parse_current_talker_cards_and_cents_saving():
     assert products[1].saving_cents == 51
 
 
+def test_parses_approximate_each_unit_without_losing_source_prices():
+    html = """
+    <div class="talker talker--Special" data-talker id="line_tomato">
+      <div class="talker__imagery"><a href="/lines/tomato"></a>
+        <span class="talker__sticker--Saving"><span class="talker__sticker__label">save $3</span></span>
+      </div>
+      <div class="talker__name" title="Tomato Gourmet Loose Kg"></div>
+      <span class="talker__prices__was">was $7.99</span>
+      <span class="talker__prices__sell">
+        <strong class="price__sell">$1</strong>
+        <span class="price__units">each approximately</span>
+      </span>
+    </div>
+    """
+
+    item = parse_specials_page(html, "https://example.test/specials")[0]
+
+    assert item.regular_price_cents == 799
+    assert item.special_price_cents == 100
+    assert item.saving_cents == 300
+    assert item.price_unit == "each approximately"
+
+
+def test_deal_sticker_is_offer_text_not_a_saving_amount():
+    html = """
+    <div class="talker talker--Deal" data-talker id="line_crackers">
+      <div class="talker__imagery"><a href="/lines/crackers"></a>
+        <span class="talker__sticker--Deal"><span class="talker__sticker__label">3 for $3</span></span>
+      </div>
+      <div class="talker__name" title="Rice Crackers 100g"></div>
+      <span class="talker__prices__was">was $2.99</span>
+      <span class="talker__prices__sell">
+        <strong class="price__sell">$1.29</strong><span class="price__units">each</span>
+      </span>
+    </div>
+    """
+
+    item = parse_specials_page(html, "https://example.test/specials")[0]
+
+    assert item.saving_cents is None
+    assert item.offer_text == "3 for $3"
+    assert item.price_unit == "each"
+
+
 def test_parses_advertised_count_and_safe_next_link():
     metadata = parse_pagination_metadata(
         with_pagination(FIXTURE.read_text(), 3_754, 2),

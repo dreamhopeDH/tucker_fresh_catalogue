@@ -13,6 +13,7 @@ type Offer = {
   special_price_cents: number | null;
   saving_cents: number | null;
   offer_text: string;
+  price_unit: string | null;
   product_ids: string[];
 };
 
@@ -120,6 +121,15 @@ function priceBadge(offer: Offer): HTMLElement {
   circle.className = "price-badge";
   circle.textContent = money(offer.special_price_cents);
   wrapper.append(circle);
+  const normalizedUnit = offer.price_unit?.toLocaleLowerCase() ?? "";
+  const compactUnit = normalizedUnit.includes("approx") ? "EACH APX" : null;
+  if (compactUnit) {
+    const unit = document.createElement("span");
+    unit.className = "price-unit-label";
+    unit.textContent = compactUnit;
+    unit.setAttribute("aria-label", offer.price_unit || compactUnit);
+    wrapper.append(unit);
+  }
   if (offer.saving_cents !== null) {
     const saving = document.createElement("span");
     saving.className = "saving-label";

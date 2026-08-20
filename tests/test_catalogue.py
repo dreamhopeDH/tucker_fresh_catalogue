@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -226,6 +227,25 @@ def test_missing_price_falls_back_to_end_of_group_four_with_null_discount():
     assert page["discount_group"] == "under_40"
     assert [item["id"] for item in page["items"]] == ["valid", "missing"]
     assert page["items"][-1]["discount_percent"] is None
+
+
+def test_inconsistent_approximate_price_hides_was_and_saving():
+    approximate = replace(
+        product("tomato", 1, 799, 100),
+        saving_cents=300,
+        price_unit="each approximately",
+    )
+
+    catalogue = catalogue_for(standalone=[approximate])
+    item = catalogue["pages"][0]["items"][0]
+    offer = item["offers"][0]
+
+    assert item["discount_percent"] is None
+    assert catalogue["pages"][0]["discount_group"] == "under_40"
+    assert offer["special_price_cents"] == 100
+    assert offer["regular_price_cents"] is None
+    assert offer["saving_cents"] is None
+    assert offer["price_unit"] == "each approximately"
 
 
 def test_manifest_keeps_all_group_metadata_and_image_keys(tmp_path: Path):

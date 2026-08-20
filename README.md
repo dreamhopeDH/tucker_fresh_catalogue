@@ -259,6 +259,11 @@ each group, while normal items remain ahead of uncertain items and invalid-price
 fallback boundaries remain intact. Randomization occurs in Python, never in the
 browser.
 
+Price units from the storefront are retained. Approximate-each offers use a
+compact `EACH APX` label beneath the numeric price. Deal stickers are not treated
+as saving amounts, and incompatible approximate regular/special/saving values
+are displayed conservatively without a misleading was price or saving.
+
 ## Grouping overrides
 
 Edit `config/manual_overrides.yml`. `merge` accepts product-ID lists to force

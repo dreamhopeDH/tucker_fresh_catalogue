@@ -5,11 +5,12 @@ from collections import defaultdict
 from .models import Product, ProductFamily, PromotionGroup
 
 
-def promotion_key(product: Product) -> tuple[int | None, int | None, str]:
+def promotion_key(product: Product) -> tuple[int | None, int | None, str, str | None]:
     return (
         product.regular_price_cents,
         product.special_price_cents,
         product.normalized_offer_text,
+        product.price_unit,
     )
 
 
@@ -18,7 +19,9 @@ def split_families_by_promotion(
 ) -> list[PromotionGroup]:
     result: list[PromotionGroup] = []
     for family in families:
-        groups: dict[tuple[int | None, int | None, str], list[Product]] = defaultdict(list)
+        groups: dict[
+            tuple[int | None, int | None, str, str | None], list[Product]
+        ] = defaultdict(list)
         for product in family.products:
             groups[promotion_key(product)].append(product)
         for products in groups.values():

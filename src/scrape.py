@@ -114,9 +114,16 @@ def parse_specials_page(html: str, page_url: str, source_order: int = 0) -> list
             source_product_id = card.get("data-product-id")
             if not source_product_id and str(card.get("id", "")).startswith("line_"):
                 source_product_id = str(card.get("id"))[len("line_") :]
-            offer_text = card.get("data-offer") or _text(card, (".offer", ".promotion"))
+            offer_text = (
+                card.get("data-offer")
+                or _text(card, (".offer", ".promotion"))
+                or _text(card, (".talker__sticker--Deal .talker__sticker__label",))
+            )
             if not offer_text and "talker--Special" in card.get("class", []):
                 offer_text = "Special"
+            price_unit = card.get("data-price-unit") or _text(
+                card, (".talker__prices__sell .price__units", ".price__units")
+            )
             products.append(
                 RawProduct(
                     source_product_id=str(source_product_id) if source_product_id else None,
@@ -136,11 +143,19 @@ def parse_specials_page(html: str, page_url: str, source_order: int = 0) -> list
                     ),
                     saving_cents=parse_price_cents(
                         card.get("data-saving")
-                        or _text(card, (".saving", ".save", ".talker__sticker__label"))
+                        or _text(
+                            card,
+                            (
+                                ".saving",
+                                ".save",
+                                ".talker__sticker--Saving .talker__sticker__label",
+                            ),
+                        )
                     ),
                     offer_text=str(offer_text) if offer_text else None,
                     scraped_at=scraped_at,
                     source_order=source_order + offset,
+                    price_unit=str(price_unit) if price_unit else None,
                 )
             )
         except (TypeError, ValueError) as error:
@@ -189,6 +204,7 @@ def _material_product_fields(product: RawProduct) -> tuple:
         product.special_price_cents,
         product.saving_cents,
         product.offer_text,
+        product.price_unit,
     )
 
 

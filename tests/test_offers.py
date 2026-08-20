@@ -21,6 +21,7 @@ def test_each_promotion_key_field_splits_group():
         {"special_price_cents": 350},
         {"regular_price_cents": 550},
         {"normalized_offer_text": "two for"},
+        {"price_unit": "per kg"},
         {"regular_price_cents": None, "special_price_cents": None},
     ]
     for values in changes:

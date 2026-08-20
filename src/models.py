@@ -15,6 +15,7 @@ class RawProduct:
     offer_text: str | None
     scraped_at: str
     source_order: int
+    price_unit: str | None = None
 
 
 @dataclass
@@ -34,6 +35,7 @@ class Product:
     normalized_offer_text: str
     source_order: int
     category_id: str | None = None
+    price_unit: str | None = None
 
 
 @dataclass

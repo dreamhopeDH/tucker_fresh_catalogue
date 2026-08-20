@@ -196,6 +196,18 @@ main { height: calc(100dvh - 112px); }
   white-space: nowrap;
 }
 
+.price-unit-label {
+  max-width: 74px;
+  margin-top: -5px;
+  padding: 2px 4px;
+  border-radius: 2px;
+  background: var(--catalogue-yellow);
+  color: var(--text-primary);
+  font-size: clamp(7px, 2.1vw, 11px);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
 .price-blocks:has(.price-block:nth-child(2)) .price-badge {
   width: clamp(38px, 10vw, 58px);
   border-width: clamp(4px, 1.2vw, 7px);

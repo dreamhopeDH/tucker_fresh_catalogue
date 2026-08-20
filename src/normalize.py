@@ -78,6 +78,7 @@ def normalize_product(raw: RawProduct, flavor_terms: list[str] | None = None) ->
         saving_cents=raw.saving_cents,
         normalized_offer_text=normalize_offer_text(raw.offer_text),
         source_order=raw.source_order,
+        price_unit=normalize_offer_text(raw.price_unit) or None,
     )
 
 

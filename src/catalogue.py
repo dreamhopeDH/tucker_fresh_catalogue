@@ -55,11 +55,24 @@ def _discount_percent(
 
 
 def _price(product: Product) -> dict:
+    regular_price = product.regular_price_cents
+    saving = product.saving_cents
+    inconsistent = (
+        regular_price is not None
+        and product.special_price_cents is not None
+        and saving is not None
+        and regular_price - product.special_price_cents != saving
+    )
+    if inconsistent:
+        saving = None
+        if product.price_unit and "approx" in product.price_unit.casefold():
+            regular_price = None
     return {
-        "regular_price_cents": product.regular_price_cents,
+        "regular_price_cents": regular_price,
         "special_price_cents": product.special_price_cents,
-        "saving_cents": product.saving_cents,
+        "saving_cents": saving,
         "offer_text": product.normalized_offer_text,
+        "price_unit": product.price_unit,
     }
 
 
