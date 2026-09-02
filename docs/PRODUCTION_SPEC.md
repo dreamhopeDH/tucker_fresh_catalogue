@@ -196,9 +196,10 @@ The existing Direct Upload workflow runs Wrangler from `web/` and deploys
 `../output/site` to the existing `CLOUDFLARE_PAGES_PROJECT`. The `functions/`
 directory therefore remains in the Pages project root.
 
-The weekly schedule remains `17 20 * * 0` and `workflow_dispatch` remains
-available. No push trigger is added. Any image-incomplete run must skip the site
-build and Cloudflare deployment, leaving the current site untouched.
+The weekly schedule is `0 22 * * 2` (Wednesday at 6:00 AM Perth time) and
+`workflow_dispatch` remains available. No push trigger is added. Any
+image-incomplete run must skip the site build and Cloudflare deployment, leaving
+the current site untouched.
 
 ## Required configuration
 

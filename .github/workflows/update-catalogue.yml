@@ -3,7 +3,7 @@ name: Update production catalogue
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 20 * * 0"
+    - cron: "0 22 * * 2"
 
 permissions:
   contents: read

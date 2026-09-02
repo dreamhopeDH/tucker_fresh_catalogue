@@ -54,6 +54,7 @@ type SearchEntry = {
   id: string;
   name: string;
   details: string[];
+  image_key: string | null;
   search_text: string;
   page: number;
 };
@@ -417,14 +418,26 @@ function renderSearchResults(): void {
     const button = document.createElement("button");
     button.className = "search-result";
     button.type = "button";
+    const image = document.createElement("img");
+    image.className = "search-result-image";
+    image.src = imageUrl(entry.image_key);
+    image.alt = "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.addEventListener("error", () => {
+      if (!image.src.endsWith("placeholder.svg")) image.src = placeholderUrl;
+    });
+    const text = document.createElement("div");
+    text.className = "search-result-text";
     const name = document.createElement("strong");
     name.textContent = entry.name;
-    button.append(name);
+    text.append(name);
     if (entry.details.length) {
       const details = document.createElement("span");
       details.textContent = entry.details.join(" · ");
-      button.append(details);
+      text.append(details);
     }
+    button.append(image, text);
     button.addEventListener("click", () => void selectSearchResult(entry, button));
     searchResults.append(button);
   });

@@ -280,6 +280,7 @@ def test_manifest_keeps_all_group_metadata_and_image_keys(tmp_path: Path):
 
 
 def test_search_index_is_lightweight_searchable_and_points_to_catalogue_pages():
+    original_image_key = "prod/products/original/a81bd34f12345678.webp"
     original = product(
         "original",
         0,
@@ -295,6 +296,9 @@ def test_search_index_is_lightweight_searchable_and_points_to_catalogue_pages():
     catalogue = catalogue_for(
         groups=[PromotionGroup("chips", "brand chips", [original, barbecue])],
         standalone=[product("coffee", 2, 100, 70)],
+        image_manifest={
+            "original": {"status": "downloaded", "object_key": original_image_key}
+        },
     )
 
     entries = catalogue["search_index"]["items"]
@@ -306,6 +310,8 @@ def test_search_index_is_lightweight_searchable_and_points_to_catalogue_pages():
     assert "Sea Salt" in family["search_text"]
     assert "Smoky BBQ" in family["search_text"]
     assert family["details"]
+    assert family["image_key"] == original_image_key
     assert coffee["page"] == 2
+    assert coffee["image_key"] is None
     assert "products" not in family
     assert "offers" not in family

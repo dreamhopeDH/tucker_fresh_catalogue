@@ -142,10 +142,15 @@ def _search_entry(item: dict, page: int) -> dict:
             if label.casefold() != item["name"].casefold()
         )
     )
+    image_key = next(
+        (product["image_key"] for product in item["products"] if product["image_key"]),
+        None,
+    )
     return {
         "id": item["id"],
         "name": item["name"],
         "details": details,
+        "image_key": image_key,
         "search_text": " ".join([item["name"], *product_labels]),
         "page": page,
     }
