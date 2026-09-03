@@ -79,6 +79,9 @@ const searchInput = document.querySelector<HTMLInputElement>("#search-input")!;
 const searchSummary = document.querySelector<HTMLParagraphElement>("#search-summary")!;
 const searchResults = document.querySelector<HTMLDivElement>("#search-results")!;
 const placeholderUrl = "./placeholder.svg";
+const SEARCH_INITIAL_RESULTS = 10;
+const SEARCH_MORE_RESULTS = 20;
+const SEARCH_DEBOUNCE_MS = 300;
 const loaded = new Set<number>();
 const loading = new Set<number>();
 const pageData = new Map<number, PageData>();
@@ -89,6 +92,9 @@ let searchIndexRequest: Promise<SearchIndex> | null = null;
 let currentPage = 1;
 let scrollTimer = 0;
 let dialogCloseTimer = 0;
+let searchDebounceTimer = 0;
+let searchMatches: SearchEntry[] = [];
+let visibleSearchResultCount = 0;
 let dialogOpener: HTMLElement | null = null;
 
 function money(cents: number | null): string {
@@ -376,6 +382,8 @@ async function loadSearchIndex(): Promise<SearchIndex> {
 }
 
 function closeSearch(): void {
+  window.clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = 0;
   if (searchDialog.open) searchDialog.close();
 }
 
@@ -397,50 +405,90 @@ async function selectSearchResult(entry: SearchEntry, opener: HTMLButtonElement)
   }
 }
 
+function makeSearchResult(entry: SearchEntry): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.className = "search-result";
+  button.type = "button";
+  const image = document.createElement("img");
+  image.className = "search-result-image";
+  image.src = imageUrl(entry.image_key);
+  image.alt = "";
+  image.loading = "lazy";
+  image.decoding = "async";
+  image.addEventListener("error", () => {
+    if (!image.src.endsWith("placeholder.svg")) image.src = placeholderUrl;
+  });
+  const text = document.createElement("div");
+  text.className = "search-result-text";
+  const name = document.createElement("strong");
+  name.textContent = entry.name;
+  text.append(name);
+  if (entry.details.length) {
+    const details = document.createElement("span");
+    details.textContent = entry.details.join(" · ");
+    text.append(details);
+  }
+  button.append(image, text);
+  button.addEventListener("click", () => void selectSearchResult(entry, button));
+  return button;
+}
+
+function appendSearchResults(count: number): void {
+  const nextCount = Math.min(visibleSearchResultCount + count, searchMatches.length);
+  searchMatches
+    .slice(visibleSearchResultCount, nextCount)
+    .forEach((entry) => searchResults.append(makeSearchResult(entry)));
+  visibleSearchResultCount = nextCount;
+  searchSummary.textContent = `${searchMatches.length} result${searchMatches.length === 1 ? "" : "s"}${searchMatches.length > visibleSearchResultCount ? `; showing first ${visibleSearchResultCount}` : ""}.`;
+
+  if (visibleSearchResultCount < searchMatches.length) {
+    const more = document.createElement("button");
+    more.className = "search-more";
+    more.type = "button";
+    more.textContent = "Search more";
+    more.setAttribute("aria-label", `Show up to ${SEARCH_MORE_RESULTS} more search results`);
+    more.addEventListener("click", () => {
+      more.remove();
+      appendSearchResults(SEARCH_MORE_RESULTS);
+    });
+    searchResults.append(more);
+  }
+}
+
 function renderSearchResults(): void {
   const query = searchInput.value.trim().toLocaleLowerCase();
   searchResults.replaceChildren();
+  searchMatches = [];
+  visibleSearchResultCount = 0;
   if (!query) {
     searchSummary.textContent = "Type a product name to search.";
     return;
   }
   if (!searchIndex) return;
   const terms = query.split(/\s+/).filter(Boolean);
-  const matches = searchIndex.items.filter((entry) => {
+  searchMatches = searchIndex.items.filter((entry) => {
     const searchable = entry.search_text.toLocaleLowerCase();
     return terms.every((term) => searchable.includes(term));
   });
-  const visible = matches.slice(0, 50);
-  searchSummary.textContent = matches.length
-    ? `${matches.length} result${matches.length === 1 ? "" : "s"}${matches.length > visible.length ? "; showing first 50" : ""}.`
-    : "No matching specials.";
-  visible.forEach((entry) => {
-    const button = document.createElement("button");
-    button.className = "search-result";
-    button.type = "button";
-    const image = document.createElement("img");
-    image.className = "search-result-image";
-    image.src = imageUrl(entry.image_key);
-    image.alt = "";
-    image.loading = "lazy";
-    image.decoding = "async";
-    image.addEventListener("error", () => {
-      if (!image.src.endsWith("placeholder.svg")) image.src = placeholderUrl;
-    });
-    const text = document.createElement("div");
-    text.className = "search-result-text";
-    const name = document.createElement("strong");
-    name.textContent = entry.name;
-    text.append(name);
-    if (entry.details.length) {
-      const details = document.createElement("span");
-      details.textContent = entry.details.join(" · ");
-      text.append(details);
-    }
-    button.append(image, text);
-    button.addEventListener("click", () => void selectSearchResult(entry, button));
-    searchResults.append(button);
-  });
+  if (!searchMatches.length) {
+    searchSummary.textContent = "No matching specials.";
+    return;
+  }
+  appendSearchResults(SEARCH_INITIAL_RESULTS);
+}
+
+function scheduleSearchResults(): void {
+  window.clearTimeout(searchDebounceTimer);
+  if (!searchInput.value.trim()) {
+    searchDebounceTimer = 0;
+    renderSearchResults();
+    return;
+  }
+  searchSummary.textContent = "Searching…";
+  searchDebounceTimer = window.setTimeout(() => {
+    searchDebounceTimer = 0;
+    renderSearchResults();
+  }, SEARCH_DEBOUNCE_MS);
 }
 
 async function openSearch(): Promise<void> {
@@ -504,7 +552,7 @@ firstButton.addEventListener("click", () => goToPage(1));
 pageSelect.addEventListener("change", () => goToPage(Number(pageSelect.value)));
 searchOpen.addEventListener("click", () => void openSearch());
 searchClose.addEventListener("click", closeSearch);
-searchInput.addEventListener("input", renderSearchResults);
+searchInput.addEventListener("input", scheduleSearchResults);
 searchDialog.addEventListener("click", (event) => {
   if (event.target === searchDialog) closeSearch();
 });

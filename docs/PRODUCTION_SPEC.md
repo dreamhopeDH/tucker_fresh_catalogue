@@ -189,6 +189,9 @@ cards.
 Catalogue search remains static and framework-free. Generation writes one
 lightweight `data/search-index.json` containing display-item names, variant
 terms, IDs, and page numbers. The browser fetches it only when search is opened.
+Search input rendering is debounced by 300 milliseconds. Results initially show
+10 lazy-loaded thumbnails and append up to 20 more only when the user selects
+the large “Search more” button.
 Selecting a result loads only its existing page JSON and reuses the existing
 product-detail dialog; it does not eagerly fetch every catalogue page.
 
