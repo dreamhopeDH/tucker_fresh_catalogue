@@ -1,4 +1,17 @@
 import "./styles.css";
+import {
+  FAVOURITES_STORAGE_KEY,
+  LOCATION_STORAGE_KEY,
+  buildPageDescriptors,
+  cataloguePagePosition,
+  currentFavouriteEntries,
+  descriptorPosition,
+  favouriteItemPosition,
+  hasFavouriteProduct,
+  parseFavouriteIds,
+  toggleFavouriteProducts,
+  type PageDescriptor,
+} from "./favourites";
 
 type ProductView = {
   product_id: string;
@@ -41,6 +54,7 @@ type DiscountGroupSummary = {
 };
 type Manifest = {
   generated_at: string;
+  page_size: number;
   page_count: number;
   pages: string[];
   search_index: string;
@@ -55,6 +69,7 @@ type SearchEntry = {
   name: string;
   details: string[];
   image_key: string | null;
+  product_ids: string[];
   search_text: string;
   page: number;
 };
@@ -87,6 +102,12 @@ const loading = new Set<number>();
 const pageData = new Map<number, PageData>();
 const pageRequests = new Map<number, Promise<PageData>>();
 let manifest: Manifest;
+let pageDescriptors: PageDescriptor[] = [];
+let pageObserver: IntersectionObserver | null = null;
+let pageGeneration = 0;
+let rebuildingPageModel = false;
+let favouriteProductIds = new Set<string>();
+let favouriteItems = new Map<string, CatalogueItem>();
 let searchIndex: SearchIndex | null = null;
 let searchIndexRequest: Promise<SearchIndex> | null = null;
 let currentPage = 1;
@@ -96,6 +117,8 @@ let searchDebounceTimer = 0;
 let searchMatches: SearchEntry[] = [];
 let visibleSearchResultCount = 0;
 let dialogOpener: HTMLElement | null = null;
+let dialogItem: CatalogueItem | null = null;
+let dialogInitialFavourite = false;
 
 function money(cents: number | null): string {
   if (cents === null) return "—";
@@ -153,6 +176,37 @@ function promotionProductLabel(product: ProductView): string {
     : label;
 }
 
+function itemProductIds(item: CatalogueItem): string[] {
+  return item.products.map((product) => product.product_id);
+}
+
+function isFavourite(item: CatalogueItem): boolean {
+  return hasFavouriteProduct(itemProductIds(item), favouriteProductIds);
+}
+
+function updateFavouriteButton(button: HTMLButtonElement, item: CatalogueItem): void {
+  const active = isFavourite(item);
+  button.classList.toggle("is-favourite", active);
+  button.textContent = active ? "★" : "☆";
+  button.setAttribute("aria-pressed", String(active));
+  button.setAttribute("aria-label", `${active ? "Remove" : "Add"} ${item.name} ${active ? "from" : "to"} favourites`);
+}
+
+function makeFavouriteButton(item: CatalogueItem): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.className = "favourite-toggle";
+  button.type = "button";
+  updateFavouriteButton(button, item);
+  button.addEventListener("click", () => {
+    favouriteProductIds = new Set(
+      toggleFavouriteProducts(favouriteProductIds, itemProductIds(item)),
+    );
+    localStorage.setItem(FAVOURITES_STORAGE_KEY, JSON.stringify([...favouriteProductIds]));
+    updateFavouriteButton(button, item);
+  });
+  return button;
+}
+
 function populateProductDialog(item: CatalogueItem): void {
   productDialogTitle.textContent = item.name;
   const gallery = document.createElement("div");
@@ -180,6 +234,7 @@ function populateProductDialog(item: CatalogueItem): void {
   item.offers.forEach((offer, index) => {
     const promotion = document.createElement("article");
     promotion.className = "product-dialog-promotion";
+    if (index === 0) promotion.classList.add("has-favourite-toggle");
     if (item.offers.length > 1) {
       const label = document.createElement("h3");
       label.textContent = `Promotion ${index + 1}`;
@@ -202,6 +257,7 @@ function populateProductDialog(item: CatalogueItem): void {
       details.append(offerText);
     }
     price.append(details);
+    if (index === 0) price.append(makeFavouriteButton(item));
     promotion.append(price);
 
     if (item.offers.length > 1 || item.products.length > 1) {
@@ -225,6 +281,8 @@ function openProductDialog(item: CatalogueItem, opener: HTMLElement): void {
   productDialog.classList.remove("is-closing");
   populateProductDialog(item);
   dialogOpener = opener;
+  dialogItem = item;
+  dialogInitialFavourite = isFavourite(item);
   productDialog.showModal();
   productDialogClose.focus();
 }
@@ -309,21 +367,39 @@ async function getPageData(index: number): Promise<PageData> {
 }
 
 async function loadPage(index: number): Promise<void> {
-  if (index < 1 || index > manifest.page_count || loaded.has(index) || loading.has(index)) return;
+  const descriptor = pageDescriptors[index - 1];
+  if (!descriptor || loaded.has(index) || loading.has(index)) return;
+  const generation = pageGeneration;
   loading.add(index);
   const shell = document.querySelector<HTMLElement>(`[data-page="${index}"]`)!;
   try {
-    const data = await getPageData(index);
+    let items: CatalogueItem[];
+    if (descriptor.kind === "favourite") {
+      items = descriptor.itemIds
+        .map((itemId) => favouriteItems.get(itemId))
+        .filter((item): item is CatalogueItem => Boolean(item));
+    } else {
+      const data = await getPageData(descriptor.sourcePage);
+      items = data.items.filter((item) => !isFavourite(item));
+    }
+    if (generation !== pageGeneration) return;
     const grid = document.createElement("div");
     grid.className = "product-grid";
-    data.items.forEach((item) => grid.append(renderCard(item)));
+    items.forEach((item) => grid.append(renderCard(item)));
+    if (!items.length) {
+      grid.classList.add("product-grid--empty");
+      const message = document.createElement("p");
+      message.textContent = "All specials from this page are in Favourite.";
+      grid.append(message);
+    }
     shell.replaceChildren(grid);
     loaded.add(index);
   } catch (error) {
+    if (generation !== pageGeneration) return;
     shell.textContent = "This page could not be loaded.";
     statusElement.textContent = error instanceof Error ? error.message : "Page load failed";
   } finally {
-    loading.delete(index);
+    if (generation === pageGeneration) loading.delete(index);
   }
 }
 
@@ -333,12 +409,13 @@ function unloadDistantPages(): void {
       const shell = document.querySelector<HTMLElement>(`[data-page="${page}"]`);
       shell?.replaceChildren();
       loaded.delete(page);
-      pageData.delete(page);
+      const descriptor = pageDescriptors[page - 1];
+      if (descriptor?.kind === "catalogue") pageData.delete(descriptor.sourcePage);
     }
   });
 }
 
-function groupForPage(page: number): DiscountGroupSummary | undefined {
+function groupForSourcePage(page: number): DiscountGroupSummary | undefined {
   return manifest.discount_groups.find((group) =>
     group.start_page !== null
     && page >= group.start_page
@@ -347,13 +424,17 @@ function groupForPage(page: number): DiscountGroupSummary | undefined {
 }
 
 function updateControls(): void {
+  const descriptor = pageDescriptors[currentPage - 1];
+  if (!descriptor) return;
   pageSelect.value = String(currentPage);
-  pageLabel.textContent = `Page ${currentPage} of ${manifest.page_count}`;
-  discountGroupLabel.textContent = groupForPage(currentPage)?.label ?? "Specials";
+  pageLabel.textContent = `Page ${currentPage} of ${pageDescriptors.length}`;
+  discountGroupLabel.textContent = descriptor.kind === "favourite"
+    ? "Favourite"
+    : groupForSourcePage(descriptor.sourcePage)?.label ?? "Specials";
   previousButton.disabled = currentPage === 1;
   firstButton.disabled = currentPage === 1;
-  nextButton.disabled = currentPage === manifest.page_count;
-  localStorage.setItem("tucker-catalogue-page", String(currentPage));
+  nextButton.disabled = currentPage === pageDescriptors.length;
+  localStorage.setItem(LOCATION_STORAGE_KEY, descriptor.key);
   void loadPage(currentPage - 1);
   void loadPage(currentPage);
   void loadPage(currentPage + 1);
@@ -361,8 +442,86 @@ function updateControls(): void {
 }
 
 function goToPage(page: number, behavior: ScrollBehavior = "smooth"): void {
-  const target = Math.max(1, Math.min(manifest.page_count, page));
+  const target = Math.max(1, Math.min(pageDescriptors.length, page));
   document.querySelector<HTMLElement>(`[data-page="${target}"]`)?.scrollIntoView({ behavior, inline: "start" });
+}
+
+async function resolveFavouriteItems(): Promise<Map<string, CatalogueItem>> {
+  if (!favouriteProductIds.size) return new Map();
+  const index = await loadSearchIndex();
+  const entries = currentFavouriteEntries(index.items, favouriteProductIds);
+  const entryIdsByPage = new Map<number, Set<string>>();
+  entries.forEach((entry) => {
+    const ids = entryIdsByPage.get(entry.page) ?? new Set<string>();
+    ids.add(entry.id);
+    entryIdsByPage.set(entry.page, ids);
+  });
+
+  const resolved = new Map<string, CatalogueItem>();
+  const sourcePages = [...entryIdsByPage.keys()].sort((left, right) => left - right);
+  const dataPages = await Promise.all(sourcePages.map((page) => getPageData(page)));
+  dataPages.forEach((data) => {
+    const currentIds = entryIdsByPage.get(data.page) ?? new Set<string>();
+    data.items.forEach((item) => {
+      if (currentIds.has(item.id) && isFavourite(item)) resolved.set(item.id, item);
+    });
+  });
+  return resolved;
+}
+
+function createPageShells(): void {
+  pageObserver?.disconnect();
+  pageGeneration += 1;
+  loaded.clear();
+  loading.clear();
+  pagesElement.replaceChildren();
+  pageSelect.replaceChildren();
+  pageDescriptors.forEach((descriptor, index) => {
+    const page = index + 1;
+    const shell = document.createElement("section");
+    shell.className = "catalogue-page";
+    shell.dataset.page = String(page);
+    shell.setAttribute(
+      "aria-label",
+      descriptor.kind === "favourite"
+        ? `Favourite catalogue page ${page}`
+        : `Catalogue page ${descriptor.sourcePage}`,
+    );
+    pagesElement.append(shell);
+    pageSelect.add(new Option(String(page), String(page)));
+  });
+}
+
+function observePageShells(): void {
+  pageObserver = new IntersectionObserver(
+    (entries) => entries.forEach((entry) => {
+      if (entry.isIntersecting) void loadPage(Number((entry.target as HTMLElement).dataset.page));
+    }),
+    { root: pagesElement, rootMargin: "0px 100%", threshold: 0.01 },
+  );
+  document.querySelectorAll<HTMLElement>(".catalogue-page").forEach((page) => pageObserver?.observe(page));
+}
+
+async function refreshPageModel(preferredKey: string | null): Promise<void> {
+  rebuildingPageModel = true;
+  try {
+    favouriteItems = await resolveFavouriteItems();
+    pageDescriptors = buildPageDescriptors(
+      [...favouriteItems.keys()],
+      manifest.page_count,
+      manifest.page_size,
+    );
+    createPageShells();
+    const targetPage = descriptorPosition(pageDescriptors, preferredKey) ?? 1;
+    currentPage = targetPage;
+    await Promise.all([loadPage(targetPage - 1), loadPage(targetPage), loadPage(targetPage + 1)]);
+    currentPage = targetPage;
+    goToPage(targetPage, "auto");
+    updateControls();
+    observePageShells();
+  } finally {
+    rebuildingPageModel = false;
+  }
 }
 
 async function loadSearchIndex(): Promise<SearchIndex> {
@@ -395,8 +554,12 @@ async function selectSearchResult(entry: SearchEntry, opener: HTMLButtonElement)
     const item = data.items.find((candidate) => candidate.id === entry.id);
     if (!item) throw new Error("Product is no longer on this catalogue page");
     closeSearch();
-    currentPage = entry.page;
-    goToPage(entry.page, "auto");
+    currentPage = (
+      isFavourite(item)
+        ? favouriteItemPosition(pageDescriptors, item.id)
+        : cataloguePagePosition(pageDescriptors, entry.page)
+    ) ?? currentPage;
+    goToPage(currentPage, "auto");
     updateControls();
     openProductDialog(item, searchOpen);
   } catch (error) {
@@ -511,28 +674,14 @@ async function start(): Promise<void> {
     if (!manifest.page_count) throw new Error("Catalogue contains no pages");
     searchOpen.disabled = false;
     statusElement.textContent = `Updated ${new Date(manifest.generated_at).toLocaleDateString()}`;
-    for (let page = 1; page <= manifest.page_count; page += 1) {
-      const shell = document.createElement("section");
-      shell.className = "catalogue-page";
-      shell.dataset.page = String(page);
-      shell.setAttribute("aria-label", `Catalogue page ${page}`);
-      pagesElement.append(shell);
-      pageSelect.add(new Option(String(page), String(page)));
-    }
-
-    const stored = Number(localStorage.getItem("tucker-catalogue-page") || "1");
-    currentPage = Number.isFinite(stored) ? Math.max(1, Math.min(stored, manifest.page_count)) : 1;
-    await Promise.all([loadPage(currentPage - 1), loadPage(currentPage), loadPage(currentPage + 1)]);
-    goToPage(currentPage, "auto");
-    updateControls();
-
-    const observer = new IntersectionObserver(
-      (entries) => entries.forEach((entry) => {
-        if (entry.isIntersecting) void loadPage(Number((entry.target as HTMLElement).dataset.page));
-      }),
-      { root: pagesElement, rootMargin: "0px 100%", threshold: 0.01 },
+    favouriteProductIds = new Set(
+      parseFavouriteIds(localStorage.getItem(FAVOURITES_STORAGE_KEY)),
     );
-    document.querySelectorAll<HTMLElement>(".catalogue-page").forEach((page) => observer.observe(page));
+    const storedLocation = localStorage.getItem(LOCATION_STORAGE_KEY);
+    const legacyPage = Number(localStorage.getItem("tucker-catalogue-page") || "1");
+    const preferredLocation = storedLocation
+      ?? `catalogue:${Number.isFinite(legacyPage) ? Math.max(1, Math.min(legacyPage, manifest.page_count)) : 1}`;
+    await refreshPageModel(preferredLocation);
   } catch (error) {
     statusElement.textContent = error instanceof Error ? error.message : "Catalogue failed to load";
     pagesElement.innerHTML = '<p class="fatal-error">Catalogue unavailable. Please try again later.</p>';
@@ -542,6 +691,7 @@ async function start(): Promise<void> {
 pagesElement.addEventListener("scroll", () => {
   window.clearTimeout(scrollTimer);
   scrollTimer = window.setTimeout(() => {
+    if (rebuildingPageModel) return;
     currentPage = Math.round(pagesElement.scrollLeft / Math.max(1, pagesElement.clientWidth)) + 1;
     updateControls();
   }, 80);
@@ -567,8 +717,28 @@ productDialog.addEventListener("click", (event) => {
 productDialog.addEventListener("close", () => {
   window.clearTimeout(dialogCloseTimer);
   productDialog.classList.remove("is-closing");
-  if (dialogOpener?.isConnected) dialogOpener.focus();
+  const opener = dialogOpener;
+  const item = dialogItem;
+  const favouriteChanged = item !== null && dialogInitialFavourite !== isFavourite(item);
+  let preferredKey = pageDescriptors[currentPage - 1]?.key ?? null;
+  if (item && dialogInitialFavourite && !isFavourite(item)) {
+    const sourcePage = searchIndex?.items.find((entry) => entry.id === item.id)?.page;
+    if (sourcePage) preferredKey = `catalogue:${sourcePage}`;
+  }
   dialogOpener = null;
+  dialogItem = null;
+  if (favouriteChanged) {
+    void refreshPageModel(preferredKey)
+      .catch((error) => {
+        statusElement.textContent = error instanceof Error ? error.message : "Favourites could not be refreshed";
+      })
+      .finally(() => {
+        if (opener?.isConnected) opener.focus();
+        else searchOpen.focus();
+      });
+  } else if (opener?.isConnected) {
+    opener.focus();
+  }
 });
 
 void start();

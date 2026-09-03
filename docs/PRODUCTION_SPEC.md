@@ -188,12 +188,26 @@ cards.
 
 Catalogue search remains static and framework-free. Generation writes one
 lightweight `data/search-index.json` containing display-item names, variant
-terms, IDs, and page numbers. The browser fetches it only when search is opened.
+terms, stable member product IDs, and page numbers. The browser fetches it when
+search is opened or when saved favourites must be reconciled with current
+specials.
 Search input rendering is debounced by 300 milliseconds. Results initially show
 10 lazy-loaded thumbnails and append up to 20 more only when the user selects
 the large “Search more” button.
 Selecting a result loads only its existing page JSON and reuses the existing
 product-detail dialog; it does not eagerly fetch every catalogue page.
+
+Favourites are browser-local and require no account or backend. The product
+dialog exposes a large star beside the promotion price. Stable product IDs are
+stored in `localStorage`, then intersected with the current search index so
+products absent from the current specials are not shown. Current favourites
+form client-generated 9-item pages before the four discount groups and are
+filtered from their original static pages. Original pages are not globally
+repacked because that would require eagerly loading the catalogue. Navigation
+uses stable favourite/catalogue page descriptors so search jumps, horizontal
+swiping, nearby-page loading, and saved-page restoration remain coherent as
+the number of favourite pages changes. Preferences do not synchronize between
+browsers or devices.
 
 The existing Direct Upload workflow runs Wrangler from `web/` and deploys
 `../output/site` to the existing `CLOUDFLARE_PAGES_PROJECT`. The `functions/`

@@ -311,7 +311,9 @@ def test_search_index_is_lightweight_searchable_and_points_to_catalogue_pages():
     assert "Smoky BBQ" in family["search_text"]
     assert family["details"]
     assert family["image_key"] == original_image_key
+    assert family["product_ids"] == ["original", "barbecue"]
     assert coffee["page"] == 2
     assert coffee["image_key"] is None
+    assert coffee["product_ids"] == ["coffee"]
     assert "products" not in family
     assert "offers" not in family

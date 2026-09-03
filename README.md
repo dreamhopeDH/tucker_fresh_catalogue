@@ -241,8 +241,14 @@ previous/next buttons, page selector, current-page restoration, active discount
 group label, nearby JSON lazy loading, distant DOM unloading, product-detail
 dialog, and placeholder fallback. It does not fetch all page JSON or render all
 product cards at startup. The lightweight `data/search-index.json` is fetched
-only when the user opens search; choosing a result loads that item's existing
-page and opens the existing product-detail dialog.
+when the user opens search or has saved favourites; choosing a result loads that
+item's existing page and opens the existing product-detail dialog.
+
+The detail dialog's star stores favourites in that browser's `localStorage`.
+Current favourites appear in 9-item Favourite pages before the discount groups
+and are removed from their original pages. Saved IDs are reconciled with each
+new catalogue, so products not present in current specials remain hidden.
+Favourites do not synchronize between browsers or devices.
 
 The four exact discount boundaries remain:
 

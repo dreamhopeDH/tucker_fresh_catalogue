@@ -151,6 +151,7 @@ def _search_entry(item: dict, page: int) -> dict:
         "name": item["name"],
         "details": details,
         "image_key": image_key,
+        "product_ids": [product["product_id"] for product in item["products"]],
         "search_text": " ".join([item["name"], *product_labels]),
         "page": page,
     }
