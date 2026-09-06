@@ -191,7 +191,7 @@ lightweight `data/search-index.json` containing display-item names, variant
 terms, stable member product IDs, and page numbers. The browser fetches it when
 search is opened or when saved favourites must be reconciled with current
 specials.
-Search input rendering is debounced by 300 milliseconds. Results initially show
+Search input rendering is debounced by 500 milliseconds. Results initially show
 10 lazy-loaded thumbnails and append up to 20 more only when the user selects
 the large “Search more” button.
 Selecting a result loads only its existing page JSON and reuses the existing
@@ -208,6 +208,13 @@ uses stable favourite/catalogue page descriptors so search jumps, horizontal
 swiping, nearby-page loading, and saved-page restoration remain coherent as
 the number of favourite pages changes. Preferences do not synchronize between
 browsers or devices.
+
+A small settings control sits in the top-right header area and opens a native
+dialog with a prominent warning badge. Four native colour controls independently
+customize the page background, price circles, saving labels, and nine product
+boxes. Choices persist only in that browser's `localStorage`; Default restores
+the original yellow, red, and white palette. Colour settings do not change
+catalogue data or synchronize between devices.
 
 The existing Direct Upload workflow runs Wrangler from `web/` and deploys
 `../output/site` to the existing `CLOUDFLARE_PAGES_PROJECT`. The `functions/`

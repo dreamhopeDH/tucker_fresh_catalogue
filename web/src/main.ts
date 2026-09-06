@@ -93,10 +93,40 @@ const searchClose = document.querySelector<HTMLButtonElement>("#search-close")!;
 const searchInput = document.querySelector<HTMLInputElement>("#search-input")!;
 const searchSummary = document.querySelector<HTMLParagraphElement>("#search-summary")!;
 const searchResults = document.querySelector<HTMLDivElement>("#search-results")!;
+const settingsOpen = document.querySelector<HTMLButtonElement>("#settings-open")!;
+const settingsDialog = document.querySelector<HTMLDialogElement>("#settings-dialog")!;
+const settingsClose = document.querySelector<HTMLButtonElement>("#settings-close")!;
+const settingsDefault = document.querySelector<HTMLButtonElement>("#settings-default")!;
 const placeholderUrl = "./placeholder.svg";
 const SEARCH_INITIAL_RESULTS = 10;
 const SEARCH_MORE_RESULTS = 20;
-const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_DEBOUNCE_MS = 500;
+const COLOUR_STORAGE_KEY = "tucker-catalogue-colours-v1";
+const DEFAULT_COLOURS = {
+  page: "#ffd900",
+  price: "#ed1c24",
+  saving: "#ffd900",
+  card: "#ffffff",
+} as const;
+type ColourKey = keyof typeof DEFAULT_COLOURS;
+const colourControls: Record<ColourKey, { input: HTMLInputElement; property: string }> = {
+  page: {
+    input: document.querySelector<HTMLInputElement>("#colour-page")!,
+    property: "--custom-page-background",
+  },
+  price: {
+    input: document.querySelector<HTMLInputElement>("#colour-price")!,
+    property: "--custom-price-circle",
+  },
+  saving: {
+    input: document.querySelector<HTMLInputElement>("#colour-saving")!,
+    property: "--custom-saving-label",
+  },
+  card: {
+    input: document.querySelector<HTMLInputElement>("#colour-card")!,
+    property: "--custom-product-card",
+  },
+};
 const loaded = new Set<number>();
 const loading = new Set<number>();
 const pageData = new Map<number, PageData>();
@@ -119,6 +149,40 @@ let visibleSearchResultCount = 0;
 let dialogOpener: HTMLElement | null = null;
 let dialogItem: CatalogueItem | null = null;
 let dialogInitialFavourite = false;
+
+function validColour(value: unknown): value is string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function applyColours(colours: Record<ColourKey, string>): void {
+  (Object.keys(DEFAULT_COLOURS) as ColourKey[]).forEach((key) => {
+    colourControls[key].input.value = colours[key];
+    document.documentElement.style.setProperty(colourControls[key].property, colours[key]);
+  });
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", colours.page);
+}
+
+function loadColours(): Record<ColourKey, string> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(COLOUR_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    return Object.fromEntries(
+      (Object.keys(DEFAULT_COLOURS) as ColourKey[]).map((key) => [
+        key,
+        validColour(stored[key]) ? stored[key] : DEFAULT_COLOURS[key],
+      ]),
+    ) as Record<ColourKey, string>;
+  } catch {
+    return { ...DEFAULT_COLOURS };
+  }
+}
+
+function saveSelectedColours(): void {
+  const colours = Object.fromEntries(
+    (Object.keys(DEFAULT_COLOURS) as ColourKey[]).map((key) => [key, colourControls[key].input.value]),
+  ) as Record<ColourKey, string>;
+  localStorage.setItem(COLOUR_STORAGE_KEY, JSON.stringify(colours));
+  applyColours(colours);
+}
 
 function money(cents: number | null): string {
   if (cents === null) return "—";
@@ -706,6 +770,21 @@ searchInput.addEventListener("input", scheduleSearchResults);
 searchDialog.addEventListener("click", (event) => {
   if (event.target === searchDialog) closeSearch();
 });
+settingsOpen.addEventListener("click", () => {
+  settingsDialog.showModal();
+  settingsClose.focus();
+});
+settingsClose.addEventListener("click", () => settingsDialog.close());
+settingsDialog.addEventListener("click", (event) => {
+  if (event.target === settingsDialog) settingsDialog.close();
+});
+(Object.keys(DEFAULT_COLOURS) as ColourKey[]).forEach((key) => {
+  colourControls[key].input.addEventListener("input", saveSelectedColours);
+});
+settingsDefault.addEventListener("click", () => {
+  localStorage.removeItem(COLOUR_STORAGE_KEY);
+  applyColours({ ...DEFAULT_COLOURS });
+});
 productDialogClose.addEventListener("click", closeProductDialog);
 productDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
@@ -741,4 +820,5 @@ productDialog.addEventListener("close", () => {
   }
 });
 
+applyColours(loadColours());
 void start();
