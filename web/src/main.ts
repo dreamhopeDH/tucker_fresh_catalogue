@@ -12,6 +12,18 @@ import {
   toggleFavouriteProducts,
   type PageDescriptor,
 } from "./favourites";
+import {
+  COLOUR_STORAGE_KEY,
+  DEFAULT_COLOURS,
+  PERSONAL_SYNC_PENDING_KEY,
+  durableState,
+  isDefaultColours,
+  parseColours,
+  type ColourKey,
+  type Colours,
+  type RemotePersonalState,
+} from "./personal-state";
+import { historyPlotValues, type HistoryPoint } from "./history";
 
 type ProductView = {
   product_id: string;
@@ -101,14 +113,6 @@ const placeholderUrl = "./placeholder.svg";
 const SEARCH_INITIAL_RESULTS = 10;
 const SEARCH_MORE_RESULTS = 20;
 const SEARCH_DEBOUNCE_MS = 500;
-const COLOUR_STORAGE_KEY = "tucker-catalogue-colours-v1";
-const DEFAULT_COLOURS = {
-  page: "#ffd900",
-  price: "#ed1c24",
-  saving: "#ffd900",
-  card: "#ffffff",
-} as const;
-type ColourKey = keyof typeof DEFAULT_COLOURS;
 const colourControls: Record<ColourKey, { input: HTMLInputElement; property: string }> = {
   page: {
     input: document.querySelector<HTMLInputElement>("#colour-page")!,
@@ -149,12 +153,14 @@ let visibleSearchResultCount = 0;
 let dialogOpener: HTMLElement | null = null;
 let dialogItem: CatalogueItem | null = null;
 let dialogInitialFavourite = false;
+let personalHistoryEnabled = false;
+let personalSyncTimer = 0;
+let personalSyncRevision = 0;
+let personalSyncInFlight: Promise<void> | null = null;
+let personalStateMessage = "";
+let personalReconcileRetries = 0;
 
-function validColour(value: unknown): value is string {
-  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
-}
-
-function applyColours(colours: Record<ColourKey, string>): void {
+function applyColours(colours: Colours): void {
   (Object.keys(DEFAULT_COLOURS) as ColourKey[]).forEach((key) => {
     colourControls[key].input.value = colours[key];
     document.documentElement.style.setProperty(colourControls[key].property, colours[key]);
@@ -162,26 +168,141 @@ function applyColours(colours: Record<ColourKey, string>): void {
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", colours.page);
 }
 
-function loadColours(): Record<ColourKey, string> {
-  try {
-    const stored = JSON.parse(localStorage.getItem(COLOUR_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
-    return Object.fromEntries(
-      (Object.keys(DEFAULT_COLOURS) as ColourKey[]).map((key) => [
-        key,
-        validColour(stored[key]) ? stored[key] : DEFAULT_COLOURS[key],
-      ]),
-    ) as Record<ColourKey, string>;
-  } catch {
-    return { ...DEFAULT_COLOURS };
-  }
+function loadColours(): Colours {
+  return parseColours(localStorage.getItem(COLOUR_STORAGE_KEY));
 }
 
 function saveSelectedColours(): void {
   const colours = Object.fromEntries(
     (Object.keys(DEFAULT_COLOURS) as ColourKey[]).map((key) => [key, colourControls[key].input.value]),
-  ) as Record<ColourKey, string>;
+  ) as Colours;
   localStorage.setItem(COLOUR_STORAGE_KEY, JSON.stringify(colours));
   applyColours(colours);
+  markPersonalSyncPending(700);
+}
+
+function currentDurableState() {
+  return durableState(favouriteProductIds, loadColours());
+}
+
+function markPersonalSyncPending(delay = 0): void {
+  localStorage.setItem(PERSONAL_SYNC_PENDING_KEY, "1");
+  personalSyncRevision += 1;
+  window.clearTimeout(personalSyncTimer);
+  personalSyncTimer = window.setTimeout(() => void pushPersonalState(), delay);
+}
+
+async function pushPersonalState(): Promise<void> {
+  if (personalSyncInFlight) return personalSyncInFlight;
+  const revision = personalSyncRevision;
+  personalSyncInFlight = (async () => {
+    try {
+      const response = await fetch("/api/profile/state", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(currentDurableState()),
+      });
+      if (!response.ok) throw new Error(`personal state returned ${response.status}`);
+      const state = (await response.json()) as RemotePersonalState;
+      personalHistoryEnabled = state.history_enabled;
+      if (revision === personalSyncRevision) {
+        localStorage.removeItem(PERSONAL_SYNC_PENDING_KEY);
+      }
+    } catch {
+      window.setTimeout(() => {
+        if (localStorage.getItem(PERSONAL_SYNC_PENDING_KEY)) void pushPersonalState();
+      }, 15_000);
+    } finally {
+      personalSyncInFlight = null;
+      if (localStorage.getItem(PERSONAL_SYNC_PENDING_KEY) && revision !== personalSyncRevision) {
+        window.clearTimeout(personalSyncTimer);
+        personalSyncTimer = window.setTimeout(() => void pushPersonalState(), 250);
+      }
+    }
+  })();
+  return personalSyncInFlight;
+}
+
+async function replaceWithRemoteState(state: RemotePersonalState): Promise<void> {
+  favouriteProductIds = new Set(parseFavouriteIds(JSON.stringify(state.favourites)));
+  localStorage.setItem(FAVOURITES_STORAGE_KEY, JSON.stringify([...favouriteProductIds]));
+  localStorage.setItem(COLOUR_STORAGE_KEY, JSON.stringify(state.customizations));
+  applyColours(parseColours(JSON.stringify(state.customizations)));
+  personalHistoryEnabled = state.history_enabled;
+  localStorage.removeItem(PERSONAL_SYNC_PENDING_KEY);
+  if (typeof manifest !== "undefined") {
+    try {
+      await refreshPageModel(pageDescriptors[currentPage - 1]?.key ?? null);
+    } catch {
+      showPersonalStateMessage("Personal settings were saved; the catalogue view will refresh on reload.");
+    }
+  }
+}
+
+function captureRestoreCode(): string | null {
+  const parameters = new URLSearchParams(location.hash.startsWith("#") ? location.hash.slice(1) : "");
+  const syncCode = parameters.get("restore");
+  if (!syncCode) return null;
+  history.replaceState(null, "", `${location.pathname}${location.search}`);
+  return syncCode;
+}
+
+function showPersonalStateMessage(message: string): void {
+  personalStateMessage = message;
+  if (typeof manifest !== "undefined") {
+    statusElement.textContent = `Updated ${new Date(manifest.generated_at).toLocaleDateString()} · ${message}`;
+  }
+}
+
+async function requestRestoredState(syncCode: string): Promise<RemotePersonalState | null> {
+  try {
+    const response = await fetch("/api/profile/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sync_code: syncCode }),
+    });
+    if (!response.ok) throw new Error("restore failed");
+    return await response.json() as RemotePersonalState;
+  } catch {
+    return null;
+  }
+}
+
+async function applyRestoreResult(request: Promise<RemotePersonalState | null>): Promise<void> {
+  const state = await request;
+  if (state) {
+    await replaceWithRemoteState(state);
+    showPersonalStateMessage("Personal settings restored.");
+  } else {
+    showPersonalStateMessage("Sync Code could not be restored; local settings were kept.");
+  }
+}
+
+async function reconcilePersonalState(): Promise<void> {
+  try {
+    if (localStorage.getItem(PERSONAL_SYNC_PENDING_KEY)) {
+      await pushPersonalState();
+      return;
+    }
+    const response = await fetch("/api/profile/state", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error("personal state unavailable");
+    personalReconcileRetries = 0;
+    const remote = await response.json() as RemotePersonalState;
+    if (remote.has_profile) {
+      await replaceWithRemoteState(remote);
+    } else {
+      const local = currentDurableState();
+      if (local.favourites.length || !isDefaultColours(local.customizations)) {
+        markPersonalSyncPending();
+      }
+    }
+  } catch {
+    // Personal state is optional; local catalogue state remains fully usable.
+    if (personalReconcileRetries < 3) {
+      personalReconcileRetries += 1;
+      window.setTimeout(() => void reconcilePersonalState(), 15_000 * personalReconcileRetries);
+    }
+  }
 }
 
 function money(cents: number | null): string {
@@ -267,8 +388,108 @@ function makeFavouriteButton(item: CatalogueItem): HTMLButtonElement {
     );
     localStorage.setItem(FAVOURITES_STORAGE_KEY, JSON.stringify([...favouriteProductIds]));
     updateFavouriteButton(button, item);
+    markPersonalSyncPending();
   });
   return button;
+}
+
+function historyPointLabel(point: HistoryPoint, value: number | null): string {
+  if (!point.available) return `${point.date}: unavailable`;
+  if (point.is_special === false) return `${point.date}: no special, 0%`;
+  return value === null ? `${point.date}: special, discount unavailable` : `${point.date}: ${value}% off`;
+}
+
+function renderHistoryGraph(container: HTMLElement, points: HistoryPoint[]): void {
+  container.replaceChildren();
+  if (!points.length) {
+    container.textContent = "No recorded history for this product yet.";
+    return;
+  }
+  const values = historyPlotValues(points);
+  const width = 560;
+  const height = 220;
+  const padding = 34;
+  const usableWidth = width - padding * 2;
+  const usableHeight = height - padding * 2;
+  const x = (index: number) => padding + (points.length === 1 ? usableWidth / 2 : index * usableWidth / (points.length - 1));
+  const y = (value: number) => height - padding - Math.max(0, Math.min(100, value)) * usableHeight / 100;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Weekly discount history line graph");
+  svg.classList.add("history-chart");
+  const baseline = document.createElementNS(svg.namespaceURI, "line");
+  baseline.setAttribute("x1", String(padding));
+  baseline.setAttribute("x2", String(width - padding));
+  baseline.setAttribute("y1", String(y(0)));
+  baseline.setAttribute("y2", String(y(0)));
+  baseline.classList.add("history-baseline");
+  svg.append(baseline);
+  for (let index = 1; index < values.length; index += 1) {
+    const previous = values[index - 1];
+    const current = values[index];
+    if (previous === null || current === null) continue;
+    const line = document.createElementNS(svg.namespaceURI, "line");
+    line.setAttribute("x1", String(x(index - 1)));
+    line.setAttribute("y1", String(y(previous)));
+    line.setAttribute("x2", String(x(index)));
+    line.setAttribute("y2", String(y(current)));
+    line.classList.add("history-line");
+    svg.append(line);
+  }
+  values.forEach((value, index) => {
+    if (value === null) return;
+    const circle = document.createElementNS(svg.namespaceURI, "circle");
+    circle.setAttribute("cx", String(x(index)));
+    circle.setAttribute("cy", String(y(value)));
+    circle.setAttribute("r", "7");
+    circle.classList.add("history-point");
+    const title = document.createElementNS(svg.namespaceURI, "title");
+    title.textContent = historyPointLabel(points[index], value);
+    circle.append(title);
+    svg.append(circle);
+  });
+  const list = document.createElement("ul");
+  list.className = "history-point-list";
+  points.forEach((point, index) => {
+    const row = document.createElement("li");
+    row.textContent = historyPointLabel(point, values[index]);
+    list.append(row);
+  });
+  container.append(svg, list);
+}
+
+function productHistorySection(item: CatalogueItem): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "product-history";
+  const heading = document.createElement("h3");
+  heading.textContent = "Discount history";
+  const selector = document.createElement("select");
+  selector.setAttribute("aria-label", "Product variant for discount history");
+  item.products.forEach((product) => selector.add(new Option(promotionProductLabel(product), product.product_id)));
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Show discount history";
+  const output = document.createElement("div");
+  output.className = "product-history-output";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    output.textContent = "Loading history…";
+    try {
+      const response = await fetch(`/api/history/${encodeURIComponent(selector.value)}`);
+      if (!response.ok) throw new Error(`history returned ${response.status}`);
+      const result = await response.json() as { points: HistoryPoint[] };
+      renderHistoryGraph(output, result.points);
+    } catch {
+      output.textContent = "Discount history is temporarily unavailable.";
+    } finally {
+      button.disabled = false;
+    }
+  });
+  section.append(heading);
+  if (item.products.length > 1) section.append(selector);
+  section.append(button, output);
+  return section;
 }
 
 function populateProductDialog(item: CatalogueItem): void {
@@ -338,6 +559,7 @@ function populateProductDialog(item: CatalogueItem): void {
   });
 
   productDialogContent.replaceChildren(gallery, promotions);
+  if (personalHistoryEnabled) productDialogContent.append(productHistorySection(item));
 }
 
 function openProductDialog(item: CatalogueItem, opener: HTMLElement): void {
@@ -732,12 +954,14 @@ async function openSearch(): Promise<void> {
 
 async function start(): Promise<void> {
   try {
+    const restoreCode = captureRestoreCode();
+    const restoreRequest = restoreCode ? requestRestoredState(restoreCode) : null;
     const response = await fetch("./data/manifest.json");
     if (!response.ok) throw new Error(`Catalogue manifest returned ${response.status}`);
     manifest = (await response.json()) as Manifest;
     if (!manifest.page_count) throw new Error("Catalogue contains no pages");
     searchOpen.disabled = false;
-    statusElement.textContent = `Updated ${new Date(manifest.generated_at).toLocaleDateString()}`;
+    statusElement.textContent = `Updated ${new Date(manifest.generated_at).toLocaleDateString()}${personalStateMessage ? ` · ${personalStateMessage}` : ""}`;
     favouriteProductIds = new Set(
       parseFavouriteIds(localStorage.getItem(FAVOURITES_STORAGE_KEY)),
     );
@@ -746,6 +970,8 @@ async function start(): Promise<void> {
     const preferredLocation = storedLocation
       ?? `catalogue:${Number.isFinite(legacyPage) ? Math.max(1, Math.min(legacyPage, manifest.page_count)) : 1}`;
     await refreshPageModel(preferredLocation);
+    if (restoreRequest) void applyRestoreResult(restoreRequest);
+    else void reconcilePersonalState();
   } catch (error) {
     statusElement.textContent = error instanceof Error ? error.message : "Catalogue failed to load";
     pagesElement.innerHTML = '<p class="fatal-error">Catalogue unavailable. Please try again later.</p>';
@@ -784,6 +1010,7 @@ settingsDialog.addEventListener("click", (event) => {
 settingsDefault.addEventListener("click", () => {
   localStorage.removeItem(COLOUR_STORAGE_KEY);
   applyColours({ ...DEFAULT_COLOURS });
+  markPersonalSyncPending(700);
 });
 productDialogClose.addEventListener("click", closeProductDialog);
 productDialog.addEventListener("cancel", (event) => {

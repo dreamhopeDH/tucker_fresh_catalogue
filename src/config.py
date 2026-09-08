@@ -46,6 +46,9 @@ class Settings:
     cloudflare_account_id: str | None
     cloudflare_api_token: str | None
     cloudflare_pages_project: str | None
+    history_checkpoint_enabled: bool
+    cloudflare_d1_database_id: str | None
+    cloudflare_d1_api_token: str | None
     output_directory: Path = ROOT / "output"
     site_data_directory: Path = ROOT / "web" / "public" / "data"
 
@@ -77,7 +80,28 @@ class Settings:
             cloudflare_account_id=os.getenv("CLOUDFLARE_ACCOUNT_ID"),
             cloudflare_api_token=os.getenv("CLOUDFLARE_API_TOKEN"),
             cloudflare_pages_project=os.getenv("CLOUDFLARE_PAGES_PROJECT"),
+            history_checkpoint_enabled=os.getenv(
+                "HISTORY_CHECKPOINT_ENABLED", "false"
+            ).strip().lower() in {"1", "true", "yes"},
+            cloudflare_d1_database_id=os.getenv("CLOUDFLARE_D1_DATABASE_ID"),
+            cloudflare_d1_api_token=os.getenv("CLOUDFLARE_D1_API_TOKEN"),
         )
+
+    def require_d1_history(self) -> None:
+        missing = [
+            name
+            for name, value in {
+                "CLOUDFLARE_ACCOUNT_ID": self.cloudflare_account_id,
+                "CLOUDFLARE_D1_DATABASE_ID": self.cloudflare_d1_database_id,
+                "CLOUDFLARE_D1_API_TOKEN": self.cloudflare_d1_api_token,
+            }.items()
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                "Missing required scheduled-history configuration: "
+                + ", ".join(missing)
+            )
 
     def require_b2(self) -> None:
         missing = [

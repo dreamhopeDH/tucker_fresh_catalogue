@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import Product, PromotionGroup, UncertainProduct
+from .pricing import discount_bucket, discount_percent, sanitized_price
 
 
 DISCOUNT_GROUPS = (
@@ -16,64 +17,6 @@ DISCOUNT_GROUPS = (
     ("under_40", "Less than 40% off"),
 )
 FALLBACK_DISCOUNT_GROUP = "under_40"
-
-
-def _valid_discount_prices(
-    regular_price_cents: int | None, special_price_cents: int | None
-) -> bool:
-    return (
-        regular_price_cents is not None
-        and special_price_cents is not None
-        and regular_price_cents > 0
-        and 0 <= special_price_cents <= regular_price_cents
-    )
-
-
-def discount_bucket(
-    regular_price_cents: int | None, special_price_cents: int | None
-) -> str | None:
-    """Classify valid prices with exact integer comparisons; return None if invalid."""
-    if not _valid_discount_prices(regular_price_cents, special_price_cents):
-        return None
-    assert regular_price_cents is not None and special_price_cents is not None
-    if special_price_cents * 2 < regular_price_cents:
-        return "over_50"
-    if special_price_cents * 2 == regular_price_cents:
-        return "exactly_50"
-    if special_price_cents * 5 <= regular_price_cents * 3:
-        return "forty_to_under_50"
-    return "under_40"
-
-
-def _discount_percent(
-    regular_price_cents: int | None, special_price_cents: int | None
-) -> float | None:
-    if not _valid_discount_prices(regular_price_cents, special_price_cents):
-        return None
-    assert regular_price_cents is not None and special_price_cents is not None
-    return round((regular_price_cents - special_price_cents) * 100 / regular_price_cents, 1)
-
-
-def _price(product: Product) -> dict:
-    regular_price = product.regular_price_cents
-    saving = product.saving_cents
-    inconsistent = (
-        regular_price is not None
-        and product.special_price_cents is not None
-        and saving is not None
-        and regular_price - product.special_price_cents != saving
-    )
-    if inconsistent:
-        saving = None
-        if product.price_unit and "approx" in product.price_unit.casefold():
-            regular_price = None
-    return {
-        "regular_price_cents": regular_price,
-        "special_price_cents": product.special_price_cents,
-        "saving_cents": saving,
-        "offer_text": product.normalized_offer_text,
-        "price_unit": product.price_unit,
-    }
 
 
 def _product_view(product: Product, image_manifest: dict) -> dict:
@@ -92,7 +35,7 @@ def _with_discount(item: dict) -> tuple[str, bool, dict]:
     bucket = discount_bucket(
         offer["regular_price_cents"], offer["special_price_cents"]
     )
-    item["discount_percent"] = _discount_percent(
+    item["discount_percent"] = discount_percent(
         offer["regular_price_cents"], offer["special_price_cents"]
     )
     return bucket or FALLBACK_DISCOUNT_GROUP, bucket is None, item
@@ -108,7 +51,7 @@ def _promotion_item(group: PromotionGroup, image_manifest: dict) -> dict:
         "products": [_product_view(product, image_manifest) for product in products],
         "offers": [
             {
-                **_price(products[0]),
+                **sanitized_price(products[0]),
                 "product_ids": [product.product_id for product in products],
             }
         ],
@@ -122,7 +65,7 @@ def _product_item(product: Product, image_manifest: dict, item_type: str = "prod
         "name": product.raw_name,
         "source_order": product.source_order,
         "products": [_product_view(product, image_manifest)],
-        "offers": [{**_price(product), "product_ids": [product.product_id]}],
+        "offers": [{**sanitized_price(product), "product_ids": [product.product_id]}],
     }
 
 

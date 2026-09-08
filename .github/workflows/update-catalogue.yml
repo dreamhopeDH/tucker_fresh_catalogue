@@ -29,6 +29,9 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+      HISTORY_CHECKPOINT_ENABLED: ${{ github.event_name == 'schedule' }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
+      CLOUDFLARE_D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_API_TOKEN }}
 
     steps:
       - name: Check out repository
@@ -116,7 +119,7 @@ jobs:
           if test -f output/run-summary.json; then
             echo "| Metric | Result |" >> "$GITHUB_STEP_SUMMARY"
             echo "|---|---:|" >> "$GITHUB_STEP_SUMMARY"
-            echo "| Mode | $(jq -r 'if .mode == "full" then "Full catalogue" else "Limited catalogue" end' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Mode | $(jq -r 'if .mode == "full" then "Full catalogue" elif .mode == "limited" then "Limited catalogue" else "Unavailable" end' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Retrieval strategy | $(jq -r 'if .retrieval_strategy == "name_az_plus_name_za" then "Name A-Z + Name Z-A" elif .retrieval_strategy == "name_az" then "Name A-Z (Z-A not required)" else .retrieval_strategy end' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Source-advertised products | $(jq -r '.source_advertised_product_count // "unknown"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Name A-Z unique | $(jq -r '.name_az_unique_count // "not applicable"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
@@ -143,6 +146,15 @@ jobs:
             echo "| Stopped after consecutive failures | $(jq -r '.stopped_after_failures' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Current products remaining | $(jq -r '.remaining' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Final pages | $(jq -r '.page_count // "pending"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| History checkpoint enabled | $(jq -r '.history_checkpoint_enabled // false' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| History checkpoint date (Perth) | $(jq -r '.history_checkpoint_date // "not applicable"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Checkpoint favourites | $(jq -r '.checkpoint_favourite_count // 0' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Newly tracked products | $(jq -r '.newly_tracked_count // 0' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Total tracked products | $(jq -r '.total_tracked_count // 0' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| History special observations | $(jq -r '.history_special_count // 0' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| History no-special observations | $(jq -r '.history_no_special_count // 0' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| History unpriced specials | $(jq -r '.history_unpriced_special_count // 0' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| History status | $(jq -r '.history_status // "not available"' output/run-summary.json) |" >> "$GITHUB_STEP_SUMMARY"
             if test "$(jq -r '.image_sync_complete' output/run-summary.json)" != "true"; then
               echo "> [!IMPORTANT] Image traversal is incomplete. Progress has been saved to the B2 manifest. Run the workflow again to continue. No new catalogue was deployed." >> "$GITHUB_STEP_SUMMARY"
             fi

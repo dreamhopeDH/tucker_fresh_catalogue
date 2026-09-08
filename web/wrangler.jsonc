@@ -7,5 +7,12 @@
     "B2_ENDPOINT": "https://s3.us-east-005.backblazeb2.com",
     "B2_BUCKET": "tucker-fresh",
     "B2_IMAGE_PREFIX": "prod"
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "PERSONAL_DB",
+      "database_name": "tucker-fresh-personal",
+      "database_id": "ad2c83de-04b8-4f26-be5e-a4350a3de0e1"
+    }
+  ]
 }

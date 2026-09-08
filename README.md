@@ -16,10 +16,11 @@ The active architecture and acceptance criteria are in
 [`docs/PRODUCTION_SPEC.md`](docs/PRODUCTION_SPEC.md). The old
 `docs/TEST_MVP_SPEC.md` is historical only.
 
-The project intentionally has no database, API server, admin dashboard, PWA,
-Service Worker, accounts, categories, frontend framework, external queue, or
-automatic B2 garbage collection. Catalogue search uses one generated static
-index and adds no server-side component.
+The catalogue itself remains static. One narrow Cloudflare D1/Pages Functions
+exception stores anonymous personal favourites/colours and permanent owner
+price history. There is still no account system, server-side catalogue, public
+history ingest API, separate Worker, admin dashboard, PWA, Service Worker,
+frontend framework, external queue, or automatic B2 garbage collection.
 
 ## Local fixture build
 
@@ -72,6 +73,8 @@ All application configuration is read by `src/config.py`.
 | `B2_ENDPOINT`, `B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET` | Authenticated S3-compatible B2 upload connection |
 | `B2_PREFIX` | `test` locally; production workflow explicitly sets `prod` |
 | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_PAGES_PROJECT` | CI deployment configuration |
+| `HISTORY_CHECKPOINT_ENABLED` | `false`; the workflow sets true only for scheduled runs |
+| `CLOUDFLARE_D1_DATABASE_ID`, `CLOUDFLARE_D1_API_TOKEN` | Scheduled history only; D1 database ID and separate scoped Read/Write token |
 
 Do not reduce the request delays or add concurrency for the production
 catalogue. To change the safe local product cap, edit `MAX_PRODUCTS`; production
@@ -142,6 +145,11 @@ the plaintext runtime variables:
 - `B2_BUCKET`
 - `B2_IMAGE_PREFIX=prod`
 
+It also declares the `PERSONAL_DB` D1 binding for database
+`tucker-fresh-personal`. After creating the real database, add its real UUID as
+`database_id` in that binding before deploying. No placeholder production UUID
+is committed.
+
 The user does not create those plaintext variables manually in the Dashboard.
 In **Settings → Variables and Secrets**, keep only these encrypted runtime
 secrets, for Production and Preview as required:
@@ -160,6 +168,38 @@ manifest/state objects, traversal, malformed paths, and other file types. It
 signs the private B2 GET with `aws4fetch`, streams the response, and uses
 Cloudflare's Cache API with immutable HTTP cache headers.
 
+### D1 provisioning and owner setup
+
+From `web/`, authenticate Wrangler to the same Cloudflare account, then:
+
+```bash
+npx wrangler d1 create tucker-fresh-personal
+# Add the returned database_id to web/wrangler.jsonc under PERSONAL_DB.
+npx wrangler d1 migrations apply tucker-fresh-personal --remote
+```
+
+Deploy the Pages project once after adding the binding. Visit the deployed site
+from the owner's existing browser; saved favourites or non-default colours will
+silently create a profile. Then use the D1 console to identify and enable only
+that owner profile:
+
+```sql
+SELECT p.id, p.updated_at, COUNT(f.product_id) AS favourite_count
+FROM profiles p
+LEFT JOIN profile_favourites f ON f.profile_id = p.id
+GROUP BY p.id, p.updated_at
+ORDER BY p.updated_at DESC;
+
+UPDATE profiles SET history_enabled = 1 WHERE id = <OWNER_PROFILE_ID>;
+SELECT sync_code FROM profiles WHERE id = <OWNER_PROFILE_ID>;
+```
+
+The partial unique index prevents enabling a second owner. For recovery,
+construct `https://<site>/#restore=<sync_code>` from the console value and send
+it privately to the user. The fragment is removed from browser history as soon
+as it is captured. Do not paste Sync Codes into issues, logs, source, or static
+JSON.
+
 ## GitHub Actions configuration
 
 Under **Repository → Settings → Secrets and variables → Actions**, keep these
@@ -168,6 +208,7 @@ GitHub secrets:
 - `B2_KEY_ID`
 - `B2_APPLICATION_KEY`
 - `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_D1_API_TOKEN` (a separate token scoped to D1 Read/Write)
 
 Keep these GitHub variables:
 
@@ -175,6 +216,7 @@ Keep these GitHub variables:
 - `B2_BUCKET`
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_PAGES_PROJECT`
+- `CLOUDFLARE_D1_DATABASE_ID`
 
 The endpoint and bucket are needed separately by GitHub's uploader and by the
 Cloudflare runtime configuration. The Cloudflare `B2_READ_*` secrets are not
@@ -190,8 +232,9 @@ PAGE_SIZE=9
 timeout-minutes=350
 ```
 
-It supports manual `workflow_dispatch` and runs weekly at `17 20 * * 0`, which
-is Monday 04:17 in Perth. There is no push trigger.
+It supports manual `workflow_dispatch` and runs weekly at `0 22 * * 2`, which
+is Wednesday 06:00 in Australia/Perth. There is no push trigger. Only the
+scheduled event enables a history checkpoint; manual runs do not create one.
 
 ## First production run and resumable image warm-up
 
@@ -222,7 +265,8 @@ gh run watch
 
 The run summary reports alphabetical retrieval counts and overlap, source and
 actual counts, ordering seed, grouping totals, four discount-group counts,
-pages, image traversal status, and deployment result. The
+scheduled checkpoint/tracking metrics, pages, image traversal status, and
+deployment result. The
 `catalogue-debug-<run number>` artifact includes:
 
 - `output/raw-products.json`
@@ -244,11 +288,21 @@ product cards at startup. The lightweight `data/search-index.json` is fetched
 when the user opens search or has saved favourites; choosing a result loads that
 item's existing page and opens the existing product-detail dialog.
 
-The detail dialog's star stores favourites in that browser's `localStorage`.
+The detail dialog's star stores favourites immediately in that browser's
+existing `localStorage` format and asynchronously synchronizes favourites and
+colour settings to an anonymous D1 profile. The permanent Sync Code remains in
+an HttpOnly cookie, and location/page position is never synchronized.
 Current favourites appear in 9-item Favourite pages before the discount groups
 and are removed from their original pages. Saved IDs are reconciled with each
 new catalogue, so products not present in current specials remain hidden.
-Favourites do not synchronize between browsers or devices.
+If D1 is unavailable, local behaviour continues and the pending full-state
+write is retried. A valid `#restore=` link replaces durable favourites/colours
+rather than merging profiles.
+
+For the manually enabled owner profile, the detail dialog exposes a lazy
+“Discount history” control. Grouped variants remain separately selectable. The
+vanilla SVG line uses 0% for a successful no-special week and a gap for an
+unavailable or safely uncomputable observation.
 
 The four exact discount boundaries remain:
 
@@ -259,8 +313,8 @@ The four exact discount boundaries remain:
 
 Each group starts on a new page. Promotion groups in the same family remain
 separate when their prices or offer text differ. Current prices and group
-membership are rebuilt from the live source each week; B2 persists image reuse
-state only, not price history. Items are deterministically randomized within
+membership are rebuilt from the live source each week; D1 persists explicitly
+tracked owner product history while B2 remains image-only. Items are deterministically randomized within
 each group, while normal items remain ahead of uncertain items and invalid-price
 fallback boundaries remain intact. Randomization occurs in Python, never in the
 browser.

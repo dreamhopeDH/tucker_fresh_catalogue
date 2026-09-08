@@ -7,7 +7,7 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "typecheck:functions": "tsc -p tsconfig.functions.json",
-    "test:functions": "node --experimental-strip-types --test tests/image-proxy.test.ts tests/favourites.test.ts",
+    "test:functions": "node --experimental-strip-types --test tests/*.test.ts",
     "build": "tsc --noEmit && tsc -p tsconfig.functions.json && vite build"
   },
   "dependencies": {
