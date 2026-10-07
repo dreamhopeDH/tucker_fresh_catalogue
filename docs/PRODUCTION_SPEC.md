@@ -55,9 +55,10 @@ Worker, VPS, or a separate Worker project. Do not make the B2 bucket public.
 ## Pagination and completeness
 
 Myfoodlink exposes at most 50 pages of 48 products from one large sorted query.
-Although page 50 links to page 51, page 51 returns an artificial zero-result
-response. Full production recovery therefore uses the storefront's supported
-alphabetical sorts:
+Page 50 may omit its next link or link to page 51, which returns an artificial
+zero-result response. After validating page 50, the scraper always treats it as
+the result-window boundary and never depends on that next link. Full production
+recovery therefore uses the storefront's supported alphabetical sorts:
 
 ```text
 Name A-Z (`sort_by=name`)

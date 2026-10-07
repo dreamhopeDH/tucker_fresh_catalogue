@@ -230,6 +230,41 @@ def test_full_recovery_unions_both_alphabetical_directions():
     assert len(calls) == 2
 
 
+def test_full_recovery_treats_window_boundary_as_terminal_without_next_links():
+    calls = []
+
+    def handler(request: httpx.Request):
+        calls.append(str(request.url))
+        sort_by = request.url.params["sort_by"]
+        ids = (
+            ["a", "b", "c", "d", "e"]
+            if sort_by == NAME_ASCENDING_SORT
+            else ["h", "g", "f", "e", "d"]
+        )
+        return httpx.Response(
+            200,
+            text=alphabetical_page(ids, 8, sort_by, None),
+            request=request,
+        )
+
+    result = fetch_specials(
+        "https://example.test/specials",
+        None,
+        0,
+        0,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sleep=lambda _: None,
+        result_window_pages=1,
+    )
+
+    assert [product.source_product_id for product in result.products] == list(
+        "abcdefgh"
+    )
+    assert result.retrieval_strategy == "name_az_plus_name_za"
+    assert result.alphabetical_overlap_count == 2
+    assert len(calls) == 2
+
+
 def test_full_recovery_rejects_an_incomplete_union():
     def handler(request: httpx.Request):
         sort_by = request.url.params["sort_by"]

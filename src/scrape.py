@@ -331,13 +331,13 @@ def _scrape_alphabetical_window(
 
         if len(products) == advertised_count:
             return _WindowResult(products, advertised_count, False)
+        if page == result_window_pages:
+            return _WindowResult(products, advertised_count, True)
         if pagination.next_url is None:
             raise RuntimeError(
                 f"{sort_label} ended after {len(products)} unique products but the source "
                 f"advertised {advertised_count}"
             )
-        if page == result_window_pages:
-            return _WindowResult(products, advertised_count, True)
         page_url = pagination.next_url
 
     raise AssertionError("Alphabetical result-window loop exited unexpectedly")
